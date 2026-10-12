@@ -99,12 +99,14 @@
   "batchId": "018f3c2a-7b1e-7c3d-9a2f-0123456789ab",
   "mapId": "factory-a",
   "tick": 142057,
+  "tickMs": 100,
   "occurredAt": "2026-04-01T09:14:23.412Z",
   "events": [ { "eventType": "RobotTelemetry", "payload": { } } ]
 }
 ```
 
-큐 메시지 본문 = 항목 하나의 공통 봉투(03)에 `schemaVersion`을 더한 것. `eventId`는 Ingest가 `{batchId}/{index}`로 채운다.
+큐 메시지 본문 = 항목 하나의 공통 봉투(03)에 `schemaVersion`을 더한 것. `eventId`는 Ingest가 `{batchId}/{index}`로 채우고,
+`tickMs`는 배치 봉투 값을 항목마다 복사한다(03). 워커는 telemetry 1행을 이 값만큼의 상태 시간으로 환산한다.
 
 | 항목 | 결정 | 근거 |
 |---|---|---|
@@ -168,7 +170,7 @@
 
 | 단계 | 동작 | 실패 시 |
 |---|---|---|
-| 1 | 스키마 검증: `schemaVersion == 1`, `batchId` UUIDv7, `events` 1~1000, `eventType` 알려진 값, 페이로드 필수 필드 · 라우팅 키 필드 존재 | **400** + 첫 오류 위치. 재시도하지 않을 오류 |
+| 1 | 스키마 검증: `schemaVersion == 1`, `batchId` UUIDv7, `tickMs ≥ 1`, `events` 1~1000, `eventType` 알려진 값, 페이로드 필수 필드 · 라우팅 키 필드 존재 | **400** + 첫 오류 위치. 재시도하지 않을 오류 |
 | 2 | `IIdemStore.TryBegin(batchId)` — 08 §9 상태 전이 표 그대로 | `done` → 202(중복), 다른 인스턴스 `pending` 5s 미만 → 503 `Retry-After: 1`, Redis 오류 → 건너뜀 |
 | 3 | 메시지 생성: `eventId = {batchId}/{index}`, 라우팅 키, 범주 | — |
 | 4 | 발행: **신뢰 채널**(task · conflict)과 **telemetry 채널**에 배열 순서대로 | §아래 |
@@ -265,7 +267,7 @@ return {'BUSY'}
 | ack | 커밋 성공 후 배치의 마지막 tag로 `multiple: true` | 처리 완료 순서대로, 건너뛰기 없음 |
 | DB 일시 오류 | ack · nack 하지 않고 같은 배치를 백오프(200ms → ×2 → 5s) 재시도. 그동안 그 파티션 소비가 멈춘다(prefetch 소진) | 전달 횟수를 올리지 않는다(08 §8). PostgreSQL 다운 동안 큐가 버퍼(07) |
 | 역직렬화 실패 · 모르는 `schemaVersion` | 그 메시지만 `BasicReject(requeue: false)` → DLX → `fleet.dlq` | 독 메시지. 같은 배치 나머지는 계속 |
-| 상태 전이 위반 | `fleet.invalid`로 발행(확인 대기) 후 정상 처리로 보고 ack | 03. 순서 이상 탐지 장치 |
+| 상태 전이 위반 | `robot_status_log`에 **`valid = false`로 영수증을 남기고**, `robot_state`는 갱신하지 않는다. `fleet.invalid`로 발행(확인 대기) 후 ack | 03. 영수증을 남겨야 Reconcile 차집합(기준 1 · 유실)과 위반 수(기준 3 · 순서)가 섞이지 않는다 |
 | 프로세스가 죽음 | 미확인분은 브로커가 반환 → 다음 활성 소비자가 재처리 → 중복은 테이블이 막는다 | 반복 크래시는 `x-delivery-limit 20` → DLQ |
 
 ### 이벤트별 저장
@@ -273,14 +275,14 @@ return {'BUSY'}
 | 이벤트 | 테이블 · 방식 | 멱등 |
 |---|---|---|
 | RobotTelemetry | `robot_telemetry` `unnest` INSERT `ON CONFLICT DO NOTHING RETURNING robot_id, status, occurred_at` | 자연 키(01) |
-| (집계) | 위 RETURNING 행만 `metrics_minute`에 상태별 `tickMs` 가산 (Moving → move, Loading · Unloading → work, Waiting → wait, Idle → idle) | **새로 들어간 행만** 집계(D4) |
+| (집계) | 위 RETURNING 행만 `metrics_minute`에 상태별로 그 행의 봉투 `tickMs` 가산 (Moving → move, Loading · Unloading → work, Waiting → wait, Idle → idle) | **새로 들어간 행만** 집계(D4) |
 | Task* | `task_event_log` INSERT `ON CONFLICT (event_id) DO NOTHING RETURNING` → 새 행만 `task_history` 단조 upsert(01) | 이벤트 영수증 + 단조 상태 |
 | (집계) | 새로 들어간 TaskCompleted만 `metrics_minute.task_count + 1` | 위와 같은 방식 |
-| RobotStatusChanged | 검증 → `robot_status_log` INSERT `ON CONFLICT DO NOTHING RETURNING` → 새 행만 `robot_state` 갱신 | |
+| RobotStatusChanged | 검증 → `robot_status_log` INSERT(`valid` 포함) `ON CONFLICT DO NOTHING RETURNING` → 새 행이면서 `valid`인 것만 `robot_state` 갱신 | 위반도 영수증은 남는다 |
 | ConflictDetected · DeadlockDetected | `conflict_log` `ON CONFLICT (event_id) DO NOTHING` | 01 |
 | PathReplanned | M3는 `conflict_log`에 넣지 않고 세기만(`fleet_worker_messages_total`) | 테이블이 01에 없다. M7에서 정한다 |
 
-`tickMs`는 워커 설정 `Fleet:TickMs`(기본 100). Simulator `--tick`과 같아야 한다 — 다르면 시간 분해가 틀린다(실행 스크립트가 같은 값을 넘긴다).
+`tickMs`는 메시지 봉투에서 읽는다(§2). 워커에 틱 길이 설정이 없으므로 Simulator `--tick`을 바꿔도 시간 분해가 맞는다.
 
 ### 상태 전이 검증
 
@@ -330,7 +332,7 @@ return {'BUSY'}
 | `robot_telemetry` (일 파티션) + `robot_telemetry_default` | `(map_id, robot_id, tick, occurred_at)` | DEFAULT는 D3 |
 | `task_history` · `conflict_log` · `metrics_minute` | 01 | |
 | `task_event_log(event_id PK, map_id, task_id, event_type, tick, occurred_at)` | `event_id` | D6 |
-| `robot_status_log(event_id PK, map_id, robot_id, tick, from_status, to_status, reason, occurred_at)` | `event_id` | D6 · 중복 판별 |
+| `robot_status_log(event_id PK, map_id, robot_id, tick, from_status, to_status, reason, valid, occurred_at)` | `event_id` | D6 · 중복 판별. `valid = false`는 전이 위반 |
 | `robot_state(map_id, robot_id PK, status, last_tick, last_event_id)` | `(map_id, robot_id)` | §6 검증 |
 | `schema_migrations` | `version` | |
 
@@ -376,7 +378,6 @@ RETURNING robot_id, status, occurred_at;
 | `ConnectionStrings:RabbitMq` | AMQP URI | IngestApi · EventWorker 기동 실패 |
 | `ConnectionStrings:Redis` | StackExchange.Redis 구성 문자열 | fail-open · 단일 워커 |
 | `ConnectionStrings:Postgres` | Npgsql 연결 문자열 | EventWorker 기동 실패 |
-| `Fleet:TickMs` | 시간 분해 기준 | 100 |
 | `Fleet:Topology:Prefix` | 이름 접두사 | 빈 값 |
 
 환경 변수는 .NET 규칙(`ConnectionStrings__RabbitMq`). **저장소에는 키 이름만 있고 값은 없다.** `appsettings*.json`에도 연결 문자열을 넣지 않는다.
@@ -387,11 +388,11 @@ Simulator 명령행 추가: `--robots N` · `--lambda λ` · `--seed n` · `--in
 
 ## 10. 유실 0 대조 도구
 
-`tools/Reconcile` (콘솔). M8 §12와 공용.
+`src/Reconcile` (콘솔, 프로젝트 `RobotFleet.Reconcile`). M8 §12와 공용. `tools/`는 로컬 도구용으로 `.gitignore`에 있어 쓰지 않는다.
 
 | 단계 | 동작 |
 |---|---|
-| 1 | 적체 0 대기: 파티션 큐 메시지 수 합 = 0이 10초 유지(관리 API 대신 `QueueDeclarePassive` 메시지 수) |
+| 1 | 적체 0 대기: 실행 스크립트가 `fleet_queue_depth` 합 = 0이 10초 유지될 때까지 기다린 뒤 도구를 부른다 |
 | 2 | 송신 로그를 임시 테이블 `sent(event_id, event_type, category, key, tick)`로 `COPY`(Npgsql binary import) |
 | 3 | 차집합 SQL (아래) |
 | 4 | JSON 요약 출력 + 종료 코드: task · conflict 누락 0이면 0, 아니면 1 |
@@ -401,7 +402,9 @@ Simulator 명령행 추가: `--robots N` · `--lambda λ` · `--seed n` · `--in
 SELECT s.event_id FROM sent s
 WHERE s.category = 'task'
   AND NOT EXISTS (SELECT 1 FROM task_event_log t WHERE t.event_id = s.event_id)
-  AND NOT EXISTS (SELECT 1 FROM robot_status_log r WHERE r.event_id = s.event_id);
+  AND NOT EXISTS (SELECT 1 FROM robot_status_log r WHERE r.event_id = s.event_id);   -- valid 무관
+-- 전이 위반 수 (기준 3)
+SELECT count(*) FROM robot_status_log WHERE map_id = @map AND NOT valid;
 -- conflict 범주 (PathReplanned 제외)
 SELECT s.event_id FROM sent s
 WHERE s.category = 'conflict' AND s.event_type <> 'PathReplanned'
@@ -409,7 +412,8 @@ WHERE s.category = 'conflict' AND s.event_type <> 'PathReplanned'
 -- telemetry: 누락 수만
 SELECT count(*) FROM sent s
 WHERE s.category = 'telemetry'
-  AND NOT EXISTS (SELECT 1 FROM robot_telemetry r WHERE r.robot_id = s.key AND r.tick = s.tick);
+  AND NOT EXISTS (SELECT 1 FROM robot_telemetry r
+                  WHERE r.map_id = @map AND r.robot_id = s.key AND r.tick = s.tick);
 ```
 
 | 출력 | 출처 |
@@ -466,7 +470,7 @@ WHERE s.category = 'telemetry'
 | 환경 변수 | `FLEET_TEST_RABBITMQ`(AMQP URI) · `FLEET_TEST_REDIS` · `FLEET_TEST_PG` | 09. 값은 저장소 밖(사용자 셸 · CI 비밀) |
 | 실행 id | `t{yyyyMMddHHmmss}{4자리 난수}` | 공용 서버를 여러 실행이 나눠 쓴다 |
 | 격리 | RabbitMQ: 토폴로지 접두사 `{runId}.` / Redis: 키 접두사 `{runId}:` / PostgreSQL: 스키마 `t_{runId}` + `search_path` | vhost 생성은 관리자 권한이 필요하다. 접두사는 일반 권한으로 된다 |
-| 정리 | 테스트 클래스 `IAsyncLifetime.DisposeAsync`에서 삭제. 시작 시 **1시간 지난 `t…` 자원 청소** | 중간에 죽은 실행의 잔여물이 다음 실행을 오염시키지 않게 |
+| 정리 | 테스트 클래스 `IAsyncLifetime.DisposeAsync`에서 삭제. 시작 시 **1시간 지난 `t…` 자원 청소** — Redis · PostgreSQL은 항상, RabbitMQ는 관리 API URL `FLEET_TEST_RABBITMQ_MGMT`가 있을 때만(AMQP로는 큐 목록을 못 얻는다) | 중간에 죽은 실행의 잔여물이 다음 실행을 오염시키지 않게. 실행 id에 생성 시각이 들어 있어 이름만으로 판정한다 |
 | 계약 테스트 | 추상 클래스 `XxxContract`(테스트 메서드 보유) ← `InMemoryXxxTests`(L1) · `RedisXxxTests`/`RabbitXxxTests`/`PgXxxTests`(L2) | fake와 실제가 같은 표를 통과해야 한다(09) |
 | 시계 | `TimeProvider` 주입(`FakeTimeProvider`) | 5초 고아 · 30초 만료 · 배치 창을 즉시 검증 |
 
@@ -526,7 +530,7 @@ WHERE s.category = 'telemetry'
 | W-05 | 처리기 | **워커 kill(미확인 반환) → 다른 소비자 재처리 → 행 · 집계 1회** |
 | W-06 | 처리기 | 역직렬화 실패 1건 → 그 건만 DLQ, 나머지 정상 |
 | W-07 | 처리기 | 같은 메시지 21회 반환 → DLQ (`x-delivery-limit 20`) |
-| W-08 | 검증 | 금지 전이 → `fleet.invalid`, ack |
+| W-08 | 검증 | 금지 전이 → `robot_status_log.valid = false` 영수증 · `robot_state` 불변 · `fleet.invalid` 발행 · ack |
 | W-09 | 검증 | 중복 전달된 RobotStatusChanged는 오탐하지 않는다 |
 | W-10 | 집계 | telemetry 중복 → `metrics_minute` 1회 가산 |
 | W-11 | 집계 | TaskCompleted 중복 → `task_count` 1회 |
@@ -570,9 +574,9 @@ WHERE s.category = 'telemetry'
 
 | 기준 | 코드 | 테스트 | 스크립트 · 도구 |
 |---|---|---|---|
-| 1 task · conflict 유실 0 | `IngestService` 확인 판정, `EventBatchSender`, `PartitionProcessor` | I-11~I-14, S-01~S-06, W-03~W-05, P-01 · P-02 | `tools/Reconcile` + X-01 |
+| 1 task · conflict 유실 0 | `IngestService` 확인 판정, `EventBatchSender`, `PartitionProcessor` | I-11~I-14, S-01~S-06, W-03~W-05, P-01 · P-02 | `src/Reconcile` + X-01 |
 | 2 중복 0 | `PgEventStore`(RETURNING 집계), `robot_status_log` | W-04 · W-05 · W-09~W-12, C-03 | 메트릭 `outcome="duplicate"` vs 행 수, X-01 |
-| 3 순서 유지 | `AssignmentCoordinator`, SAC 토폴로지, `StatusTransitions` 검증 | R-03 · R-04, W-08, C-04 | `fleet_invalid_depth` · `fleet_worker_messages_total{outcome="invalid"}`, X-02 |
+| 3 순서 유지 | `AssignmentCoordinator`, SAC 토폴로지, `StatusTransitions` 검증 | R-03 · R-04, W-08, C-04 | Reconcile `invalidTransitions`(`robot_status_log.valid = false`) · `fleet_invalid_depth`, X-02 |
 | 4 처리량 · 지연 | 배치 창 · `unnest` · 확인 몰아받기 | W-01, D-04 | `fleet_event_lag_seconds` · `fleet_queue_depth`, X-03 |
 | 5 틱 예산 | 버퍼 + 백그라운드 송신 | S-04 · S-07 | `fleet_tick_overrun_total`, X-04 |
 | 6 telemetry 유실 계측 | 범주별 확인 타임아웃 | I-09 · I-10 | `fleet_telemetry_dropped_total` + Reconcile telemetry 행 |
@@ -595,35 +599,479 @@ WHERE s.category = 'telemetry'
 ## 13. 작업 분할
 
 `[핵심]` = 중간 관리자(Opus). `[단순 S1~S4]` = 하위 에이전트(Sonnet), 최대 4명 병렬. **묶음끼리 파일이 겹치지 않는다.**
-1차: S1 · S2 · S4 병렬(계약 · DB · 서버 구성 · 테스트 장치) → 2차: S3(호스트 조립)는 S1 완료 후. `[핵심]`은 S1 완료 후 시작.
 
-### [단순 S1] 계약 — `src/Shared/Messaging/**`, `src/Shared/Pipeline/**`, `src/Shared/Domain/StatusTransitions.cs`, `tests/Shared.Tests/Messaging/**`
+| 차수 | 묶음 | 선행 |
+|---|---|---|
+| 1차 (병렬) | S1 · S2 · S4 | 없음. S2 · S4는 S1의 **시그니처(아래 코드 블록)** 에 맞춰 쓴다 — S1 산출물이 없어도 같은 이름 · 같은 형태로 컴파일되게 |
+| 병합 | 중간 관리자 | 1차 셋을 합치고 `RobotFleet.sln`에 프로젝트 추가, 전체 빌드 |
+| 2차 | S3 · [핵심] | 병합 완료 |
 
-- [ ] `EventBatch` · `EventEnvelope` · 페이로드 record 9종 · `EventType` · `EventCategory` · `FleetJsonContext`
-- [ ] `RoutingKeys` · `EventCategories` · `TopologySpec`(08 §8 표, 접두사 지원)
-- [ ] 인터페이스 6종 시그니처(§2) · `IngestResult` · `PublishOutcome`
-- [ ] `StatusTransitions` (03 표 전체)
-- [ ] 테스트 M-01~M-04
+1차 공통 규칙:
 
-### [단순 S2] DB · 서버 구성 — `db/migrations/**`, `src/Infrastructure.Postgres/Migrations/**`, `deploy/compose/infra/**`
+| 규칙 | 근거 |
+|---|---|
+| `RobotFleet.sln`은 아무도 고치지 않는다. 자기 csproj를 `dotnet build <csproj>`로 직접 빌드 | 세 묶음이 같은 파일을 고치면 충돌 |
+| `Directory.Build.props`(net8.0 · nullable · 경고 = 오류)를 따른다. 패키지 버전은 아래 표 그대로 | 묶음 간 버전 불일치 방지 |
+| 접속 정보 · 비밀번호를 코드 · 설정 · 주석 · 커밋 메시지에 넣지 않는다 | 09 |
+| 파일 상단 주석은 근거가 되는 문서 절(예: `// 10 §8`)만 | |
 
-- [ ] `001_schema.sql`(01 테이블) · `002_logs_and_state.sql`(§8 추가 테이블) · `003_partition_fn.sql`(함수 · DEFAULT)
-- [ ] `Migrator`(advisory lock · 이력 · 체크섬) · `PartitionMaintainer`(기동 · 매시)
-- [ ] 통합 테스트 서버용 `deploy/compose/infra/docker-compose.yml` — `rabbitmq:3.13-management`(`enabled_plugins`: `rabbitmq_consistent_hash_exchange`, `rabbitmq_prometheus`, `rabbitmq_management`; `rabbitmq.conf`: 08 §8 브로커 설정 중 단일 노드 해당분) · `redis:7.2`(AOF everysec) · `postgres:16`. 비밀번호는 `.env`(커밋 금지)에서, `.env.example`은 자리표시자만
-- [ ] 테스트 D-01~D-03 (`tests/Infrastructure.Tests/Postgres/MigrationTests.cs`, `PartitionTests.cs`)
+| 패키지 | 버전 |
+|---|---|
+| `RabbitMQ.Client` | 7.1.2 |
+| `StackExchange.Redis` | 2.8.16 |
+| `Npgsql` | 8.0.5 |
+| `prometheus-net.AspNetCore` | 8.2.1 |
+| `Microsoft.Extensions.TimeProvider.Testing` | 8.10.0 |
+| xunit · FluentAssertions · Test.Sdk | 기존 테스트 프로젝트와 같은 버전 |
 
-### [단순 S3] 호스트 조립 — `src/IngestApi/Program.cs` · `Endpoints/**` · `Health/**`, `src/EventWorker/Program.cs` · `Health/**`, `src/PipelineHost/**`, `src/Simulator/SimulationOptions.cs` · `Program.cs`, csproj · `RobotFleet.sln`
+### [단순 S1] 계약
 
-- [ ] 프로젝트 생성: `IngestApi` · `EventWorker` · `PipelineHost` · `Infrastructure.RabbitMq` · `Infrastructure.Redis` · `Infrastructure.Postgres` · `Infrastructure.InMemory` · `tools/Reconcile` 와 테스트 프로젝트 3개, 참조 관계, 패키지(`RabbitMQ.Client` 7.1 · `StackExchange.Redis` · `Npgsql` 8 · `prometheus-net.AspNetCore`)
+**만들 파일** (프로젝트 `src/Shared/RobotFleet.Shared.csproj`, 외부 패키지 추가 금지)
+
+| 파일 | 내용 |
+|---|---|
+| `src/Shared/Messaging/FleetSchema.cs` | `public static class FleetSchema { public const int Version = 1; public const int MaxEventsPerBatch = 1000; }` |
+| `src/Shared/Messaging/EventType.cs` | 03 이벤트 9종 문자열 상수 + `IReadOnlySet<string> All` |
+| `src/Shared/Messaging/EventCategory.cs` | `enum EventCategory { Telemetry, Task, Conflict }`, `EventCategories.Of(string eventType)`, `EventCategories.IsPersistent(string eventType)` — 03 "이벤트 → 큐 매핑" 표 |
+| `src/Shared/Messaging/EventBatch.cs` | 배치 · 항목 봉투 |
+| `src/Shared/Messaging/Payloads.cs` | 페이로드 record 9종 + `CellDto` |
+| `src/Shared/Messaging/FleetJsonContext.cs` | 소스 생성 컨텍스트 + `FleetJson` 도우미 |
+| `src/Shared/Messaging/RoutingKeys.cs` | 01 라우팅 키 표 |
+| `src/Shared/Messaging/TopologySpec.cs` | 08 §8 인자 표를 데이터로 |
+| `src/Shared/Pipeline/*.cs` | 인터페이스 6종 + 주고받는 record (파일당 인터페이스 1개) |
+| `src/Shared/Domain/StatusTransitions.cs` | 03 상태 전이 표 전체 |
+| `tests/Shared.Tests/Messaging/{EnvelopeJsonTests,RoutingKeyTests,TopologySpecTests,StatusTransitionTests}.cs` | M-01~M-04 + 전이 표 |
+
+**공개 시그니처**
+
+```csharp
+namespace RobotFleet.Shared.Messaging;
+
+public sealed record EventBatch(
+    int SchemaVersion, string BatchId, string MapId, long Tick, int TickMs,
+    DateTimeOffset OccurredAt, IReadOnlyList<EventItem> Events);
+
+public sealed record EventItem(string EventType, JsonElement Payload);
+
+/// 큐 메시지 본문. eventId = "{batchId}/{index}"
+public sealed record EventEnvelope(
+    int SchemaVersion, string EventId, string EventType, string MapId, long Tick, int TickMs,
+    DateTimeOffset OccurredAt, JsonElement Payload)
+{
+    public static EventEnvelope From(EventBatch batch, int index);
+}
+
+public sealed record CellDto(int X, int Y);
+public sealed record RobotTelemetryPayload(string RobotId, int X, int Y, int Heading, int Status, int Battery,
+    string? TaskId, int PathIndex, int PathLength);
+public sealed record TaskCreatedPayload(string TaskId, int Type, CellDto Origin, CellDto Destination, int Priority);
+public sealed record TaskAssignedPayload(string TaskId, string RobotId, int PlannedPathLength, int EstimatedDurationMs);
+public sealed record TaskStartedPayload(string TaskId, string RobotId);
+public sealed record TaskCompletedPayload(string TaskId, string RobotId, int ActualSteps, int MoveMs, int WaitMs,
+    int WorkMs, int ReplanCount);
+public sealed record TaskFailedPayload(string TaskId, string? RobotId, string Reason, int AtX, int AtY);
+public sealed record ConflictDetectedPayload(string ConflictType, int X, int Y, IReadOnlyList<string> RobotIds,
+    string WinnerRobotId, string Resolution, int WaitMs);
+public sealed record DeadlockDetectedPayload(IReadOnlyList<string> Cycle, IReadOnlyList<CellDto> Cells,
+    string Resolution, string YieldRobotId, int YieldToX, int YieldToY, int ResolvedMs);
+public sealed record PathReplannedPayload(string RobotId, string? TaskId, string Reason, int OldLength,
+    int NewLength, double ComputeMs);
+public sealed record RobotStatusChangedPayload(string RobotId, int From, int To, string Reason);
+
+public static class FleetJson
+{
+    public static JsonSerializerOptions Options { get; }                 // FleetJsonContext.Default.Options
+    public static byte[] Serialize<T>(T value);                          // 소스 생성 컨텍스트만 사용
+    public static T Deserialize<T>(ReadOnlySpan<byte> utf8);
+    public static JsonElement ToElement<T>(T payload);
+    public static T PayloadOf<T>(EventEnvelope envelope);
+}
+
+public static class RoutingKeys
+{
+    /// telemetry → robotId, Task* → taskId, RobotStatusChanged → robotId, conflict 범주 → mapId
+    public static string Of(string eventType, JsonElement payload, string mapId);
+}
+
+public sealed record ExchangeSpec(string Name, string Type, bool Durable);
+public sealed record QueueSpec(string Name, EventCategory? Category, int? Partition,
+    IReadOnlyDictionary<string, object> Arguments);
+public sealed record BindingSpec(string Exchange, string Queue, string RoutingKey);   // consistent-hash 가중치 "1"
+public sealed record TopologySpec(IReadOnlyList<ExchangeSpec> Exchanges, IReadOnlyList<QueueSpec> Queues,
+    IReadOnlyList<BindingSpec> Bindings)
+{
+    public const int Partitions = 16;
+    public static TopologySpec Build(string prefix = "");
+    public static string ExchangeName(EventCategory category, string prefix = "");    // "{prefix}fleet.task"
+    public static string QueueName(EventCategory category, int partition, string prefix = ""); // "{prefix}fleet.task.p03"
+    public static string DlxName(string prefix = "");       // "{prefix}fleet.dlx"  (fanout)
+    public static string DlqName(string prefix = "");       // "{prefix}fleet.dlq"  (quorum)
+    public static string InvalidQueueName(string prefix = ""); // "{prefix}fleet.invalid" (quorum, 기본 exchange로 발행)
+}
+```
+
+`TopologySpec.Build` 인자 (숫자는 `long`, 불리언은 `bool`):
+
+| 큐 | 인자 |
+|---|---|
+| task · conflict 32 | `x-queue-type=quorum`, `x-single-active-consumer=true`, `x-delivery-limit=20`, `x-dead-letter-exchange={prefix}fleet.dlx`, `x-dead-letter-strategy=at-least-once`, `x-overflow=reject-publish`, `x-max-length-bytes=67108864` |
+| telemetry 16 | `x-queue-type=classic`, `x-single-active-consumer=true`, `x-overflow=drop-head`, `x-max-length=20000` |
+| `fleet.dlq` · `fleet.invalid` | `x-queue-type=quorum` |
+
+```csharp
+namespace RobotFleet.Shared.Pipeline;
+
+public interface IEventSink                       // Simulator 틱 루프 → 송신 버퍼
+{
+    bool TryWrite(EventBatch batch);              // 대기 없음
+    ValueTask<bool> WaitToWriteAsync(CancellationToken ct);   // false = 닫힘
+}
+
+public enum IngestStatus { Accepted, Duplicate, Unavailable, Invalid }
+public sealed record IngestResult(IngestStatus Status, int TelemetryDropped = 0, string? Error = null);
+public interface IIngestClient
+{
+    Task<IngestResult> SendAsync(EventBatch batch, ReadOnlyMemory<byte> body, CancellationToken ct);
+}
+
+public enum IdemBeginStatus { Begin, Takeover, Done, Busy, Bypass }   // Bypass = 저장소 불통(fail-open)
+public readonly record struct IdemBegin(IdemBeginStatus Status, long PendingSinceMs);
+public interface IIdemStore
+{
+    Task<IdemBegin> TryBeginAsync(string batchId, CancellationToken ct);
+    Task CompleteAsync(string batchId, CancellationToken ct);
+    Task AbortAsync(string batchId, long pendingSinceMs, CancellationToken ct);   // 내 pending일 때만 삭제
+}
+
+public sealed record OutgoingMessage(EventCategory Category, string RoutingKey, string MessageId,
+    string EventType, bool Persistent, ReadOnlyMemory<byte> Body);
+public sealed record PublishOutcome(int ReliableConfirmed, int ReliableFailed,
+    int TelemetryConfirmed, int TelemetryDropped, IReadOnlyDictionary<string, int> DropReasons);
+public interface IEventPublisher
+{
+    Task<PublishOutcome> PublishBatchAsync(IReadOnlyList<OutgoingMessage> messages, CancellationToken ct);
+    Task PublishToQueueAsync(string queue, OutgoingMessage message, CancellationToken ct);   // fleet.invalid. 확인 실패 시 예외
+}
+
+public sealed record Delivery(string Queue, ulong DeliveryTag, string MessageId, string EventType,
+    int SchemaVersion, ReadOnlyMemory<byte> Body, bool Redelivered, long DeliveryCount);
+public interface IPartitionSubscription : IAsyncDisposable    // Dispose = 취소 + 채널 닫기(미확인 반환)
+{
+    string Queue { get; }
+    Task AckUpToAsync(ulong deliveryTag, CancellationToken ct);   // multiple: true
+    Task RejectAsync(ulong deliveryTag, CancellationToken ct);    // requeue: false → DLX
+}
+public interface IPartitionSubscriber
+{
+    Task<IPartitionSubscription> SubscribeAsync(string queue, ushort prefetch,
+        Func<Delivery, CancellationToken, ValueTask> onDelivery, CancellationToken ct);
+    Task<long> GetMessageCountAsync(string queue, CancellationToken ct);
+}
+
+public sealed record TelemetryRow(string MapId, string RobotId, long Tick, short X, short Y, short Heading,
+    short Status, short? Battery, DateTimeOffset OccurredAt, int TickMs);
+public sealed record TaskEventRow(string EventId, string MapId, string TaskId, string EventType, long Tick,
+    DateTimeOffset OccurredAt, JsonElement Payload);
+public sealed record StatusChangeRow(string EventId, string MapId, string RobotId, long Tick,
+    DateTimeOffset OccurredAt, short From, short To, string Reason, bool Valid);
+public sealed record ConflictRow(string EventId, string MapId, long Tick, DateTimeOffset OccurredAt,
+    string EventType, JsonElement Payload);
+public sealed record StoreBatch(IReadOnlyList<TelemetryRow> Telemetry, IReadOnlyList<TaskEventRow> TaskEvents,
+    IReadOnlyList<StatusChangeRow> StatusChanges, IReadOnlyList<ConflictRow> Conflicts);
+public sealed record StoreResult(int TelemetryInserted, int TelemetryDuplicate, int TaskInserted, int TaskDuplicate,
+    int StatusInserted, int StatusDuplicate, int ConflictInserted, int ConflictDuplicate);
+public sealed record RobotStateRow(string MapId, string RobotId, short Status, long LastTick, string LastEventId);
+public interface IEventStore
+{
+    Task<StoreResult> StoreBatchAsync(StoreBatch batch, CancellationToken ct);   // 트랜잭션 1개
+    Task<IReadOnlyDictionary<string, RobotStateRow>> GetRobotStatesAsync(string mapId,
+        IReadOnlyCollection<string> robotIds, CancellationToken ct);
+    Task<IReadOnlySet<string>> GetExistingStatusEventIdsAsync(IReadOnlyCollection<string> eventIds, CancellationToken ct);
+}
+
+public sealed record RosterView(IReadOnlyList<string> Members)   // id 문자열 오름차순
+{
+    public int RankOf(string workerId);                          // 없으면 -1
+}
+public interface IPartitionRoster
+{
+    bool IsConfigured { get; }
+    Task<RosterView?> HeartbeatAsync(string workerId, CancellationToken ct);   // null = 불통
+    Task LeaveAsync(string workerId, CancellationToken ct);
+}
+```
+
+```csharp
+namespace RobotFleet.Shared.Domain;
+public static class StatusTransitions
+{
+    public static IReadOnlyList<(RobotStatus From, RobotStatus To, string Reason)> All { get; }   // 03 표 전부
+    public static bool IsAllowed(RobotStatus from, RobotStatus to, string reason);
+}
+```
+
+**완료 조건**
+
+| 조건 |
+|---|
+| `dotnet build src/Shared/RobotFleet.Shared.csproj` 경고 0 |
+| `dotnet test tests/Shared.Tests` 전부 통과, 기존 테스트 회귀 없음 |
+| M-01: 03의 배치 봉투 예시 JSON(`tickMs` 포함) → 역직렬화 → 직렬화가 공백 제외 같은 바이트, 속성 순서 = 선언 순서 |
+| M-02: 9종 각각 라우팅 키 기대값 표(테스트에 표로) |
+| M-03: `EventEnvelope.From(batch, 17).EventId == $"{batchId}/17"`, `TickMs` 복사 |
+| M-04: `Build("")` → exchange 4 · 큐 50 · 바인딩 48, 위 인자 표와 일치, `Build("t1.")` → 모든 이름 접두사 |
+| 전이: 03 표의 허용 칸 전부 `true`, 금지 예시 5개 `false` |
+
+### [단순 S2] DB · 서버 구성
+
+**만들 파일**
+
+| 파일 | 내용 |
+|---|---|
+| `db/migrations/001_schema.sql` | 01 PostgreSQL 테이블 그대로(`robot_telemetry` 파티션 부모 · `task_history` · `conflict_log` · `metrics_minute` · 유니크 인덱스). 날짜 파티션은 만들지 않는다 |
+| `db/migrations/002_logs_and_state.sql` | 아래 DDL |
+| `db/migrations/003_partitions.sql` | 파티션 함수 + DEFAULT 파티션 |
+| `src/Infrastructure.Postgres/RobotFleet.Infrastructure.Postgres.csproj` | `Npgsql`, `Microsoft.Extensions.Logging.Abstractions`, Shared 참조. `../../db/migrations/*.sql`을 `migrations/`로 출력 복사 |
+| `src/Infrastructure.Postgres/Migrations/Migrator.cs` | 아래 |
+| `src/Infrastructure.Postgres/Migrations/PartitionMaintainer.cs` | 아래 |
+| `tests/Infrastructure.Tests/RobotFleet.Infrastructure.Tests.csproj` | Postgres · TestSupport(S4) 참조 |
+| `tests/Infrastructure.Tests/Postgres/{MigrationTests,PartitionTests}.cs` | D-01~D-03 (L2) |
+| `deploy/compose/infra/docker-compose.yml`, `rabbitmq/enabled_plugins`, `rabbitmq/rabbitmq.conf`, `.env.example` | 통합 테스트 서버 |
+
+```sql
+-- 002_logs_and_state.sql
+CREATE TABLE task_event_log (
+    event_id    TEXT PRIMARY KEY,
+    map_id      TEXT NOT NULL,
+    task_id     TEXT NOT NULL,
+    event_type  TEXT NOT NULL,
+    tick        BIGINT NOT NULL,
+    occurred_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX ix_task_event_log_task ON task_event_log (task_id);
+
+CREATE TABLE robot_status_log (
+    event_id    TEXT PRIMARY KEY,
+    map_id      TEXT NOT NULL,
+    robot_id    TEXT NOT NULL,
+    tick        BIGINT NOT NULL,
+    from_status SMALLINT NOT NULL,
+    to_status   SMALLINT NOT NULL,
+    reason      TEXT NOT NULL,
+    valid       BOOLEAN NOT NULL,          -- 전이 검증 결과 (10 §6)
+    occurred_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX ix_robot_status_log_invalid ON robot_status_log (map_id) WHERE NOT valid;
+
+CREATE TABLE robot_state (
+    map_id        TEXT NOT NULL,
+    robot_id      TEXT NOT NULL,
+    status        SMALLINT NOT NULL,
+    last_tick     BIGINT NOT NULL,
+    last_event_id TEXT NOT NULL,
+    PRIMARY KEY (map_id, robot_id)
+);
+
+-- 003_partitions.sql
+CREATE TABLE IF NOT EXISTS robot_telemetry_default PARTITION OF robot_telemetry DEFAULT;
+CREATE OR REPLACE FUNCTION fleet_ensure_telemetry_partition(day date) RETURNS text
+LANGUAGE plpgsql AS $$
+DECLARE name text := format('robot_telemetry_%s', to_char(day, 'YYYYMMDD'));
+BEGIN
+    EXECUTE format('CREATE TABLE IF NOT EXISTS %I PARTITION OF robot_telemetry FOR VALUES FROM (%L) TO (%L)',
+                   name, day::timestamp AT TIME ZONE 'UTC', (day + 1)::timestamp AT TIME ZONE 'UTC');
+    RETURN name;
+END $$;
+```
+
+> 날짜 경계는 UTC다. `day::timestamp AT TIME ZONE 'UTC'`가 그날 UTC 자정의 `timestamptz`다.
+
+```csharp
+namespace RobotFleet.Infrastructure.Postgres.Migrations;
+
+public sealed class Migrator(NpgsqlDataSource dataSource, string migrationsDirectory, ILogger<Migrator> logger)
+{
+    /// advisory lock(hashtext('fleet:migrations')) 안에서 schema_migrations에 없는 파일을 이름 순으로,
+    /// 파일마다 트랜잭션 1개. 적용된 파일의 SHA-256이 다르면 MigrationChecksumException. 반환 = 이번에 적용한 버전
+    public Task<IReadOnlyList<string>> ApplyAsync(CancellationToken ct);
+}
+public sealed class MigrationChecksumException(string version) : Exception;
+
+public sealed class PartitionMaintainer(NpgsqlDataSource dataSource, TimeProvider time, ILogger<PartitionMaintainer> logger)
+{
+    public Task EnsureAsync(CancellationToken ct);              // UTC 당일 · 익일
+    public Task<long> CountDefaultRowsAsync(CancellationToken ct);
+    public Task RunHourlyAsync(CancellationToken ct);            // 매시 정각 EnsureAsync + CountDefaultRows
+}
+```
+
+`schema_migrations(version text PRIMARY KEY, checksum text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())`는 Migrator가 첫 실행 때 만든다. 스키마는 연결 문자열의 `search_path`를 따른다(테스트 격리).
+
+docker-compose:
+
+| 서비스 | 이미지 | 설정 |
+|---|---|---|
+| rabbitmq | `rabbitmq:3.13-management` | 포트 5672 · 15672. `enabled_plugins`: `[rabbitmq_management,rabbitmq_prometheus,rabbitmq_consistent_hash_exchange].` `rabbitmq.conf`: `vm_memory_high_watermark.relative = 0.6`, `disk_free_limit.absolute = 2GB`, `raft.wal_max_size_bytes = 64000000`. 사용자 · 비밀번호 · vhost는 `.env`의 `RABBITMQ_DEFAULT_USER` · `RABBITMQ_DEFAULT_PASS` · `RABBITMQ_DEFAULT_VHOST` |
+| redis | `redis:7.2` | 포트 6379. `--appendonly yes --appendfsync everysec --requirepass ${REDIS_PASSWORD}` |
+| postgres | `postgres:16` | 포트 5432. `POSTGRES_USER` · `POSTGRES_PASSWORD` · `POSTGRES_DB`는 `.env` |
+| 공통 | | 이름 있는 볼륨, `restart: unless-stopped`, healthcheck |
+
+`.env.example`은 키만 두고 값은 `change-me`. `.env`는 이미 `.gitignore`에 있다.
+
+**완료 조건**
+
+| 조건 |
+|---|
+| `dotnet build src/Infrastructure.Postgres` 경고 0 |
+| `dotnet build tests/Infrastructure.Tests` — S4 병합 후 확인(1차 단독으로는 Postgres 프로젝트까지) |
+| D-01~D-03이 `[IntegrationFact("FLEET_TEST_PG")]` + `[Trait("Category","Integration")]`로 작성되고, 각 테스트가 `TestRun.PgSchema` 스키마를 만들고 지운다 |
+| SQL 3개가 빈 데이터베이스에 이름 순으로 적용 가능(사람이 원격 서버에서 1회 확인 — 중간 관리자) |
+| compose 파일에 비밀번호 · 주소 리터럴 없음 |
+
+### [단순 S3] 호스트 조립 (2차)
+
+`src/IngestApi/Program.cs` · `Endpoints/**` · `Health/**`, `src/EventWorker/Program.cs` · `Health/**`, `src/PipelineHost/**`,
+`src/Simulator/SimulationOptions.cs` · `Program.cs`, 새 csproj, `RobotFleet.sln`.
+
+- [ ] 프로젝트 생성: `IngestApi` · `EventWorker` · `PipelineHost` · `Infrastructure.RabbitMq` · `Infrastructure.Redis`, 테스트 `IngestApi.Tests` · `EventWorker.Tests`. 참조 관계 · 패키지(표)
 - [ ] `AddFleetIngest` · `AddFleetWorker` · `AddFleetSimulatorEvents` 조립(설정 → 구현 선택, §9 표)
-- [ ] 엔드포인트 배선, `/metrics` · `/health/*`(§11 readiness 조건), 워커 관리 포트
-- [ ] Simulator 명령행 옵션 추가(§9) · 사용법 문자열 · `SimulationOptionsTests` 추가 행
+- [ ] 엔드포인트 배선, `/metrics` · `/health/*`(§11 readiness), 워커 관리 포트
+- [ ] Simulator 명령행 옵션(§9) · 사용법 문자열 · `SimulationOptionsTests` 추가 행
 
-### [단순 S4] 테스트 장치 · 단순 fake · 도구 껍데기 — `tests/TestSupport/**`, `src/Infrastructure.InMemory/{InMemoryEventSink,InMemoryIdemStore,InMemoryPartitionRoster,FakeIngestClient}.cs`, `tools/Reconcile/Program.cs` · `ReconcileOptions.cs`
+(2차 착수 시 S1 산출물 기준으로 시그니처 수준 명세를 다시 준다.)
 
-- [ ] `IntegrationFactAttribute` · `TestRun`(실행 id · 접두사 · 스키마) · 1시간 지난 자원 청소기 · `FakeTimeProvider` 연결
-- [ ] fake 4종(§12 표의 실패 주입 포함)
-- [ ] Reconcile 명령행 · 송신 로그 읽기 · `COPY` · JSON 출력 껍데기 (차집합 SQL은 [핵심])
+### [단순 S4] 테스트 장치 · 단순 fake · Reconcile 껍데기
+
+**만들 파일**
+
+| 파일 | 내용 |
+|---|---|
+| `tests/TestSupport/RobotFleet.TestSupport.csproj` | 클래스 라이브러리. xunit(`FactAttribute`용) · `StackExchange.Redis` · `Npgsql` · `Microsoft.Extensions.TimeProvider.Testing`, Shared 참조 |
+| `tests/TestSupport/{IntegrationFactAttribute,TestEnv,TestRun,StaleResourceSweeper}.cs` | 아래 |
+| `src/Infrastructure.InMemory/RobotFleet.Infrastructure.InMemory.csproj` | Shared 참조만 |
+| `src/Infrastructure.InMemory/{InMemoryEventSink,InMemoryIdemStore,InMemoryPartitionRoster,FakeIngestClient}.cs` | 아래 |
+| `src/Reconcile/RobotFleet.Reconcile.csproj` | Exe. `Npgsql`, Shared 참조 |
+| `src/Reconcile/{Program,ReconcileOptions,SendLogReader,SentEventImporter,ReconcileReport,IReconcileQueries,ReconcileRunner}.cs` | 아래 |
+| `src/Reconcile/ReconcileQueries.cs` | **자리표시만**: `IReconcileQueries` 구현, 모든 메서드 `throw new NotImplementedException()`. 본문은 2차 [핵심]이 채운다 |
+| `tests/Reconcile.Tests/RobotFleet.Reconcile.Tests.csproj`, `SendLogReaderTests.cs`, `ReconcileOptionsTests.cs`, `TestRunNameTests.cs` | K-01~K-03. Reconcile · TestSupport 참조 |
+
+```csharp
+namespace RobotFleet.TestSupport;
+
+/// 지정한 환경 변수 중 하나라도 비어 있으면 Skip = "{이름} 없음". 클래스에는 [Trait("Category","Integration")]를 따로 단다
+public sealed class IntegrationFactAttribute : FactAttribute { public IntegrationFactAttribute(params string[] envVars); }
+public sealed class IntegrationTheoryAttribute : TheoryAttribute { public IntegrationTheoryAttribute(params string[] envVars); }
+
+public static class TestEnv
+{
+    public const string RabbitMqVar = "FLEET_TEST_RABBITMQ", RedisVar = "FLEET_TEST_REDIS",
+                        PgVar = "FLEET_TEST_PG", RabbitMgmtVar = "FLEET_TEST_RABBITMQ_MGMT";
+    public static string? RabbitMq { get; }  public static string? Redis { get; }
+    public static string? Pg { get; }        public static string? RabbitMgmt { get; }
+}
+
+public sealed class TestRun
+{
+    public string RunId { get; }              // "t" + yyyyMMddHHmmss(UTC) + 소문자 hex 4자리
+    public string RabbitPrefix => RunId + ".";
+    public string RedisPrefix => RunId + ":";
+    public string PgSchema => "t_" + RunId;
+    public static TestRun New(TimeProvider? time = null);
+    public static bool TryParseCreatedAt(string resourceName, out DateTimeOffset createdAt);   // 접두사 어디서든 runId 추출
+    public static bool IsStale(string resourceName, DateTimeOffset now, TimeSpan age);         // 기본 1시간
+}
+
+public static class StaleResourceSweeper
+{
+    public static Task<int> SweepRedisAsync(IConnectionMultiplexer redis, DateTimeOffset now, CancellationToken ct);   // SCAN "t*:*"
+    public static Task<int> SweepPostgresAsync(NpgsqlDataSource pg, DateTimeOffset now, CancellationToken ct);         // 스키마 "t_t*"
+    /// FLEET_TEST_RABBITMQ_MGMT(관리 API URL)가 있을 때만. 없으면 0 반환하고 아무것도 안 한다
+    public static Task<int> SweepRabbitAsync(string? managementUrl, DateTimeOffset now, CancellationToken ct);
+}
+```
+
+```csharp
+namespace RobotFleet.Infrastructure.InMemory;
+
+public sealed class InMemoryEventSink(int capacity = 600) : IEventSink
+{
+    public IReadOnlyList<EventBatch> Batches { get; }
+    public void Drain();                       // 쌓인 배치를 비워 공간을 만든다(송신 완료 흉내)
+    public void Close();                       // 이후 WaitToWriteAsync = false
+}
+
+/// 08 §9 상태 전이 표 그대로. orphan 5000ms
+public sealed class InMemoryIdemStore(TimeProvider time) : IIdemStore
+{
+    public void FailNext(int count);           // 다음 count회 TryBegin = Bypass, Complete/Abort = 예외 무시
+    public string? ValueOf(string batchId);    // "pending:{ms}" | "done" | null — 테스트 관찰용
+}
+
+/// 만료 30s. RosterView는 살아 있는 id 오름차순
+public sealed class InMemoryPartitionRoster(TimeProvider time, bool configured = true) : IPartitionRoster
+{
+    public void Disconnect();                  // 이후 HeartbeatAsync = null
+    public void Reconnect();
+}
+
+public sealed class FakeIngestClient : IIngestClient
+{
+    public void Script(params IngestResult[] results);   // 순서대로 반환, 소진 후 Accepted
+    public TimeSpan Delay { get; set; }                  // 응답 지연(틱 루프 비차단 검증용)
+    public IReadOnlyList<(EventBatch Batch, byte[] Body)> Sent { get; }
+}
+```
+
+```csharp
+namespace RobotFleet.Reconcile;
+
+/// --sendlog <파일|디렉터리> --map <mapId> [--out <json>] [--drain-seconds 10]. 연결 문자열은 ConnectionStrings__Postgres 환경 변수
+public sealed record ReconcileOptions(string SendLogPath, string MapId, string? OutPath, int DrainSeconds)
+{ public static ReconcileOptions Parse(string[] args); }   // 잘못된 인자 → ArgumentException
+
+public sealed record SentEvent(string EventId, string BatchId, long Tick, string EventType, string Category, string Key);
+public static class SendLogReader { public static IEnumerable<SentEvent> Read(string path); }   // §5 JSONL, 디렉터리면 *.jsonl 전부
+public static class SentEventImporter
+{
+    /// 임시 테이블 sent(event_id, batch_id, tick, event_type, category, key)에 binary COPY. 반환 = 행 수
+    public static Task<long> ImportAsync(NpgsqlConnection conn, IEnumerable<SentEvent> events, CancellationToken ct);
+}
+public sealed record CategoryCount(long Sent, long Stored, long Missing, IReadOnlyList<string> MissingSample);
+public sealed record ReconcileReport(string MapId, CategoryCount Task, CategoryCount Conflict,
+    CategoryCount Telemetry, long InvalidTransitions);   // 종료 코드: Task · Conflict Missing 0 → 0
+public interface IReconcileQueries
+{
+    Task<CategoryCount> TaskAsync(NpgsqlConnection conn, string mapId, CancellationToken ct);
+    Task<CategoryCount> ConflictAsync(NpgsqlConnection conn, string mapId, CancellationToken ct);
+    Task<CategoryCount> TelemetryAsync(NpgsqlConnection conn, string mapId, CancellationToken ct);
+    Task<long> InvalidTransitionsAsync(NpgsqlConnection conn, string mapId, CancellationToken ct);
+}
+```
+
+```csharp
+public sealed class ReconcileRunner(IReconcileQueries queries, TextWriter output)
+{
+    /// 적체 0 대기는 하지 않는다(실행 스크립트가 맡는다). 연결 → SentEventImporter → 질의 4개 → 보고서 JSON
+    /// (System.Text.Json 기본 + camelCase) 출력 · --out 파일 저장 → 종료 코드 반환
+    public Task<int> RunAsync(ReconcileOptions options, string connectionString, CancellationToken ct);
+}
+```
+
+`Program`은 `ReconcileOptions.Parse` → `ConnectionStrings__Postgres` 확인(없으면 오류 메시지 · 종료 코드 2) → `new ReconcileRunner(new ReconcileQueries(), Console.Out).RunAsync(...)`.
+
+| ID | 테스트 |
+|---|---|
+| K-01 | `SendLogReader` — §5 행 형식 3줄 파일 → 3개, 빈 줄 무시, 깨진 JSON 줄 → 줄 번호 포함 예외 |
+| K-02 | `ReconcileOptions.Parse` — 필수 누락 · 모르는 옵션 · 기본값 |
+
+**완료 조건**
+
+| 조건 |
+|---|
+| 세 csproj와 `tests/Reconcile.Tests` 빌드 경고 0 (S1 시그니처 기준. S1 병합 전이면 중간 관리자가 병합 후 확인) |
+| K-01~K-03 통과 |
+| fake 4종이 위 시그니처 · 주석의 의미론을 따른다(계약 테스트는 [핵심]이 병합 후 붙인다) |
+| K-03 `tests/Reconcile.Tests/TestRunNameTests.cs` — `TestRun.New` 형식(`^t\d{14}[0-9a-f]{4}$`), `TryParseCreatedAt`이 접두사 붙은 이름(`t20261012093000ab12.fleet.task.p00`, `t_t20261012093000ab12`, `t20261012093000ab12:idem:x`)에서 시각 추출, `IsStale` 경계 |
 
 ### [핵심] 중간 관리자
 
@@ -635,8 +1083,8 @@ WHERE s.category = 'telemetry'
 - [ ] `src/EventWorker/Core/{PartitionProcessor,EventHandlers,AssignmentCoordinator}.cs`, `src/Infrastructure.Redis/RedisPartitionRoster.cs` + W-01~W-12 · R-01~R-07
 - [ ] `src/Infrastructure.Postgres/PgEventStore.cs` (unnest · RETURNING 집계 SQL) + D-04
 - [ ] 계약 기반 클래스 `tests/*/Contracts/*Contract.cs` + C-01~C-04 · T-01~T-03
-- [ ] `tools/Reconcile/ReconcileQueries.cs` (차집합 SQL)
-- [ ] P-01 · P-02, L3 X-01~X-04 실행 · 보고서
+- [ ] `src/Reconcile/ReconcileQueries.cs` (차집합 SQL)
+- [ ] 1차 병합 · sln 갱신, P-01 · P-02, L3 X-01~X-04 실행 · 보고서
 
 ---
 

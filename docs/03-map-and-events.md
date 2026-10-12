@@ -205,6 +205,7 @@ public enum TaskStatus : byte
   "eventType":  "RobotTelemetry",
   "mapId":      "factory-a",
   "tick":       142057,                   // 시뮬레이터 틱 번호
+  "tickMs":     100,                      // 틱 1회의 시뮬레이션 시간 (ms)
   "occurredAt": "2026-04-01T09:14:23.412Z",
   "payload":    { }
 }
@@ -214,6 +215,7 @@ public enum TaskStatus : byte
 |---|---|
 | `eventId` | **멱등 키**. `{batchId}/{index}`. `batchId`는 UUID v7이라 시간순 정렬이 되어 디버깅에 유리 |
 | `tick` | 시뮬레이터 내부 논리 시각. 배속을 바꿔도 순서가 보존됨 |
+| `tickMs` | 틱 1회가 나타내는 시뮬레이션 시간. 워커가 telemetry 1행을 상태별 시간(05 시간 분해)으로 환산할 때 쓴다. 배치 봉투 값을 Ingest가 항목마다 복사 |
 | `occurredAt` | 실제 발생 시각. 지연 도착 판정에 사용 |
 
 > `tick`과 `occurredAt`을 둘 다 두는 이유 — 배속 60으로 돌리면 실제 1초에
@@ -229,6 +231,7 @@ POST /api/v1/events/batch
   "batchId":    "018f3c2a-7b1e-7c3d-9a2f-0123456789ab",   // UUID v7, 틱당 1개
   "mapId":      "factory-a",
   "tick":       142057,
+  "tickMs":     100,
   "occurredAt": "2026-04-01T09:14:23.412Z",
   "events": [
     { "eventType": "ConflictDetected",  "payload": { "conflictType": "vertex", "x": 18, "y": 6, "robotIds": ["R-002","R-017"], "winnerRobotId": "R-017", "resolution": "wait", "waitMs": 100 } },
