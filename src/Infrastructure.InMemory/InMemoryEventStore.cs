@@ -7,6 +7,7 @@ public sealed class InMemoryEventStore : IEventStore
 {
     private readonly object _gate = new();
     private readonly HashSet<(string Map, string Robot, long Tick, DateTimeOffset At)> _telemetry = [];
+    private readonly HashSet<(string Map, string Robot, long Tick)> _telemetryTicks = [];
     private readonly Dictionary<(string Map, string Robot, DateTimeOffset Minute), MetricsRow> _metrics = [];
     private readonly Dictionary<string, TaskEventRow> _taskEvents = new(StringComparer.Ordinal);
     private readonly Dictionary<string, TaskHistoryChange> _taskHistory = new(StringComparer.Ordinal);
@@ -41,7 +42,7 @@ public sealed class InMemoryEventStore : IEventStore
 
     public bool HasTelemetry(string mapId, string robotId, long tick)
     {
-        lock (_gate) return _telemetry.Any(t => t.Map == mapId && t.Robot == robotId && t.Tick == tick);
+        lock (_gate) return _telemetryTicks.Contains((mapId, robotId, tick));
     }
 
     /// task_event_log ∪ robot_status_log ∪ conflict_log 의 event_id (Reconcile의 적재 집합)
@@ -151,6 +152,7 @@ public sealed class InMemoryEventStore : IEventStore
             }
 
             telIns++;
+            _telemetryTicks.Add((t.MapId, t.RobotId, t.Tick));
             if (StoreMapping.BucketOf(t.Status) is { } bucket)
             {
                 AddMetrics(t.MapId, t.RobotId, t.OccurredAt, MetricsRow.Of(bucket, t.TickMs));

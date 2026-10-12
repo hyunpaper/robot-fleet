@@ -20,6 +20,7 @@ public sealed class AssignmentCoordinator
     private SortedSet<int>? _candidate;
     private RosterView? _view;
     private long _lastBeat = long.MinValue;
+    private volatile bool _killed;
 
     public AssignmentCoordinator(IPartitionRoster roster, IPartitionSubscriber subscriber, EventHandlers handlers,
                                  WorkerOptions options, TimeProvider time, ILogger<AssignmentCoordinator> logger)
@@ -60,7 +61,7 @@ public sealed class AssignmentCoordinator
     {
         try
         {
-            while (!ct.IsCancellationRequested)
+            while (!ct.IsCancellationRequested && !_killed)
             {
                 await RebalanceOnceAsync(ct);
                 await Task.Delay(_options.RebalanceInterval, _time, ct);
@@ -72,7 +73,7 @@ public sealed class AssignmentCoordinator
         finally
         {
             await StopAllAsync(drain: true);
-            if (_roster.IsConfigured)
+            if (_roster.IsConfigured && !_killed)
             {
                 try
                 {
@@ -86,14 +87,28 @@ public sealed class AssignmentCoordinator
         }
     }
 
-    /// 프로세스가 죽은 것과 같게: ack 없이 모든 채널을 닫고 명부에서 나가지 않는다
-    public Task KillAsync() => StopAllAsync(drain: false);
+    /// 프로세스가 죽은 것과 같게: 이후 재배정을 멈추고, ack 없이 모든 채널을 닫고, 명부에서 나가지 않는다(30초 뒤 만료)
+    public async Task KillAsync()
+    {
+        _killed = true;
+        await _gate.WaitAsync();
+        try
+        {
+            await StopAllAsync(drain: false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
 
     internal async Task RebalanceOnceAsync(CancellationToken ct)
     {
         await _gate.WaitAsync(ct);
         try
         {
+            if (_killed) return;
+            await RestartDeadAsync(ct);
             var desired = await DesiredAsync(ct);
             if (desired is null) return;   // 명부 불통: 현재 몫 고정
 
@@ -110,6 +125,23 @@ public sealed class AssignmentCoordinator
         finally
         {
             _gate.Release();
+        }
+    }
+
+    // 채널이 닫혀 끝난 처리기는 같은 큐로 다시 구독한다
+    private async Task RestartDeadAsync(CancellationToken ct)
+    {
+        List<(int Partition, int Index, PartitionProcessor Old)> dead;
+        lock (_owned)
+            dead = _owned.SelectMany(p => p.Value.Select((proc, i) => (p.Key, i, proc))).Where(x => x.proc.IsDead).ToList();
+
+        foreach (var (partition, index, old) in dead)
+        {
+            await old.StopAsync(drain: false);
+            var fresh = new PartitionProcessor(old.Queue, _subscriber, _handlers, _options, _time, _logger);
+            await fresh.StartAsync(ct);
+            lock (_owned) _owned[partition][index] = fresh;
+            _logger.LogWarning("{Queue} 처리기 재시작", old.Queue);
         }
     }
 

@@ -36,6 +36,9 @@ internal sealed class PartitionProcessor
     /// 처리 · ack까지 끝낸 메시지 수(테스트 관찰용)
     public long Acked { get; private set; }
 
+    /// 멈추라고 하지 않았는데 루프가 끝났다(채널이 닫혀 ack 실패 등). 코디네이터가 다시 띄운다
+    public bool IsDead => _loop.IsCompleted && !_stopping;
+
     public async Task StartAsync(CancellationToken ct)
     {
         _subscription = await _subscriber.SubscribeAsync(Queue, _options.Prefetch, OnDeliveryAsync, ct);
@@ -62,8 +65,9 @@ internal sealed class PartitionProcessor
         {
             await _loop;
         }
-        catch (OperationCanceledException)
+        catch (Exception ex) when (ex is OperationCanceledException || !drain)
         {
+            // 강제 종료 뒤의 ack 실패는 예상된 결과다(미확인분은 브로커가 반환했다)
         }
     }
 
@@ -102,8 +106,17 @@ internal sealed class PartitionProcessor
                 }
             }
 
-            if (batch.Count > 0)
+            if (batch.Count == 0) continue;
+            try
+            {
                 await ProcessAsync(batch, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && !ct.IsCancellationRequested)
+            {
+                // ack · reject 실패 = 채널이 닫혔다. 미확인분은 브로커가 반환하므로 재전달에 맡기고 이 처리기는 끝낸다
+                _logger.LogWarning(ex, "{Queue} 브로커 확인 실패, 처리기 종료(재전달에 맡김)", Queue);
+                return;
+            }
         }
     }
 

@@ -77,6 +77,9 @@ public sealed class FleetSimulation
 
     public IReadOnlyList<Robot> Robots => _robots;
 
+    /// 매 틱 끝에 부른다(in-process 시험의 장애 주입 지점)
+    public Func<long, CancellationToken, Task>? AfterTick { get; set; }
+
     public long Tick => _tick;
 
     public async Task<FleetRunResult> RunAsync(CancellationToken ct)
@@ -92,6 +95,8 @@ public sealed class FleetSimulation
                     exit = ExitSinkClosed;
                     break;
                 }
+
+                if (AfterTick is { } hook) await hook(_tick, ct);
 
                 if (_options.SpeedFactor > 0)
                 {
