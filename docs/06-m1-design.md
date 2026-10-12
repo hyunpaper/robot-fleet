@@ -489,7 +489,7 @@ public sealed class RobotAction
             → 실패:     Status = Error, task.Status = Failed, 루프 종료 (exit code 2)
             (이 틱에서 2단계로 계속 진행)
 
-2. [시작]  CurrentAction == None && Status == Moving
+2. [시작]  CurrentAction == None && Status ∈ {Moving, Waiting}
             → PathIndex == PlannedPath.Count - 1
                 → 도착. Status = Idle, task.Status = Completed, PlannedPath 비움 (RobotStatusChanged: arrived_park)
                   → 이 틱에서 루프 종료 (3단계 없음)
@@ -499,7 +499,8 @@ public sealed class RobotAction
                 → else
                     → decision = arbiter.DecideAsync(mapId, tick, [MoveRequest(...)])[0]
                     → Granted:  CurrentAction = Move(next.Cell, MoveMsPerCell + carry)
-                    → 거부:     Status = Waiting (M1에선 발생하지 않음. M2 처리). 3단계 없음
+                    → 거부:     Status = Waiting, waitMs += TickMs, carry = 0. 3단계 없음
+                                (M2: Waiting은 다음 틱에 같은 칸을 waitMs를 실어 재요청. 승인되면 Moving, waitMs = 0)
 
 3. [진행]  CurrentAction != None   (이 틱에 방금 시작한 동작도 포함)
             → RemainingMs -= TickMs
@@ -825,7 +826,7 @@ M1 기본 시나리오 `PK-01 (0,39) N → ST-01 (6,3)`: 경로 42칸, 회전 2�
 | T-07 | 같은 지점 | `(2,2) → (2,2)` | 1회째: PLAN 후 2단계에서 즉시 ARRIVED, `false`, Idle, exit 0 |
 | T-08 | MaxTicks | `MaxTicks 5`, 긴 경로 | 5회 후 종료, exit 3, `Status Moving` 유지 |
 | T-09 | arbiter 호출 횟수 | 직진 3칸, 기록용 fake arbiter | `DecideAsync` 3회 (이동마다 1회, 회전·도착 틱엔 0회), `ReleaseAsync` 3회, 각 Release의 `cell`은 이전 칸 |
-| T-10 | arbiter 거부 시 Waiting | 항상 거부하는 fake | tick 1 후 `Status Waiting`, 위치 불변. (M1에선 루프가 계속 Waiting으로 돌다 MaxTicks로 종료 — exit 3) |
+| T-10 | arbiter 거부 시 Waiting | 항상 거부하는 fake, `MaxTicks 20` | tick 1 후 `Status Waiting`, 위치 불변. 매 틱 재요청(`DecideAsync` 20회, `WaitMs` 0, 100, …, 1900), MaxTicks로 종료 — exit 3 (M2에서 재시도 추가) |
 | T-11 | 콘솔 로그 포맷 | `StringWriter` renderer, T-01 | 첫 줄 `"[t=000001 0.1s] R-001 PLAN    (0,0)E → (3,0)   steps=3 cost=3.0 ..."` 로 시작, 마지막 줄이 `"ARRIVED (3,0)"` 포함, `MOVE` 줄 정확히 3개 |
 | T-12 | 틱 초과 계수 | `SpeedFactor 1`, `TickMs 1`, 가짜 delay | `OverrunCount > 0` (예산 1ms를 계산이 넘김) |
 | T-13 | 통합 — 기본 시나리오 | factory-a, `(0,39) N → (6,3)`, `SpeedFactor 0` | exit 0, `stats.Tick == 427`, 최종 `(6,3)` Heading North |
