@@ -12,6 +12,8 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/Infrastructure.Postgres/RobotFleet.Infrastructure.Postgres.csproj" />
+    <ProjectReference Include="../../src/Infrastructure.Redis/RobotFleet.Infrastructure.Redis.csproj" />
+    <ProjectReference Include="../../src/Infrastructure.RabbitMq/RobotFleet.Infrastructure.RabbitMq.csproj" />
     <ProjectReference Include="../TestSupport/RobotFleet.TestSupport.csproj" />
   </ItemGroup>
   <ItemGroup>

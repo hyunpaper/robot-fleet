@@ -12,4 +12,7 @@
     <ProjectReference Include="../Shared/RobotFleet.Shared.csproj" />
     <ProjectReference Include="../Infrastructure.InMemory/RobotFleet.Infrastructure.InMemory.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Scripts/*.lua" LogicalName="%(Filename).lua" />
+  </ItemGroup>
 </Project>
