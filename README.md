@@ -84,6 +84,7 @@ Simulator ──(틱마다 배치 이동 요청)──► FleetController ◄─
 | [05-metrics](docs/05-metrics.md) | 지표 정의, 실험 설계 |
 | [06-m1-design](docs/06-m1-design.md) | M1 상세 설계와 테스트 목록 |
 | [07-high-availability](docs/07-high-availability.md) | 관제 서버 2대, Redis Sentinel, RabbitMQ quorum queue, 3노드 분산 |
+| [08-ha-detailed-design](docs/08-ha-detailed-design.md) | 해시 체인 워터마크, Lua 규약, Sentinel·큐 설정 값, 노드 배치, 장애 주입 측정 |
 
 ---
 
@@ -104,14 +105,14 @@ Simulator ──(틱마다 배치 이동 요청)──► FleetController ◄─
 
 | 과제 | 문제 | 해결 |
 |---|---|---|
-| **배치 판정** | 200대 개별 요청 시 100ms 틱 초과 | 틱당 1회 일괄 판정, Redis Lua 1회로 일괄 잠금 |
+| **배치 판정** | 200대 개별 요청 시 100ms 틱 초과 | 틱당 1회 일괄 판정, 락·기록을 커밋 Lua 1회로 원자 반영 |
 | **충돌 회피** | 동일 칸 진입, 자리 맞바꿈, 추종 | 현재·다음 칸 2칸 선점, 맞바꿈 시 후순위 거부 |
 | **기아 방지** | 근거리 우선 시 원거리 작업 적체 | 대기 시간·잔여 거리·긴급도 합산 점수 |
 | **교착 해소** | 분산 락 구조상 순환 대기 발생 | 대기 그래프 순환 탐지, 최저 비용 로봇 양보 |
-| **락 만료** | 배속 변경 시 실시간 TTL 왜곡 | 틱 기반 논리 만료(20틱), 실시간 TTL은 안전망 |
+| **판정 정합성** | 장애 조치로 최근 틱 소실 시 이중 승인 | 해시 체인 워터마크, 꼬리 불일치면 판정 거부 후 재주장 |
 | **순서 보장** | 완료 이벤트가 시작보다 먼저 처리 | robotId 해시 16파티션, 파티션당 단일 소비자 |
 | **멱등 처리** | 재전송 이벤트 유실 또는 중복 집계 | 고정 이벤트 ID, 2단계 키, DB 유니크 제약 |
-| **상태 복구** | Redis 초기화 시 셀 락 전체 소실 | epoch 키로 감지, 현재 위치 기준 락 재구성 |
+| **상태 복구** | Redis 초기화·장애 조치 시 칸 점유 소실 | epoch·체인 검사로 감지, Simulator 위치로 맵 해시 재구성 |
 | **경로 계획** | 최단 경로의 잦은 회전으로 지연 | 방향 포함 A*, 회전 비용 반영, 1회 0.15ms |
 | **효율 측정** | 정지 시간만으로 원인 구분 불가 | 이동·작업·대기·유휴 분해, 병목 위치 특정 |
 
@@ -123,9 +124,9 @@ Simulator ──(틱마다 배치 이동 요청)──► FleetController ◄─
 
 | 노드 | 주소 | 역할 |
 |---|---|---|
-| cp-1 | 192.168.10.10 | control plane (워크로드 없음) |
-| worker-1 | 192.168.10.11 | 애플리케이션, PostgreSQL, Redis·RabbitMQ 멤버 |
-| worker-2 | 192.168.10.12 | 애플리케이션, Redis·RabbitMQ 멤버 |
-| worker-3 | 192.168.10.13 | 애플리케이션, 모니터링, Redis·RabbitMQ 멤버 |
+| cp-1 | 192.168.10.10 | control plane (워크로드 없음), 2 vCPU·2GB |
+| worker-1 | 192.168.10.11 | 애플리케이션, PostgreSQL, Redis·RabbitMQ 멤버, 6GiB |
+| worker-2 | 192.168.10.12 | 애플리케이션, Redis·RabbitMQ 멤버, 6GiB |
+| worker-3 | 192.168.10.13 | 애플리케이션, 모니터링, Redis·RabbitMQ 멤버, 6GiB |
 
-Redis(primary 1 + replica 2 + Sentinel 3)와 RabbitMQ(3노드, quorum queue)는 worker 3대에 분산된다. → 07
+Redis(primary 1 + replica 2 + Sentinel 3)와 RabbitMQ(3노드, quorum queue)는 worker 3대에 분산된다. → 07, 08
