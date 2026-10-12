@@ -11,16 +11,16 @@
 | 애플리케이션 pod 1개 종료 (FleetController · IngestApi · EventWorker · QueryApi) | 서비스 유지 | replicas ≥ 2 + 재전송 멱등 |
 | Redis primary 다운 | 틱 일시 정지 후 재개. 로봇 겹침 0 | Sentinel 장애 조치 + 상태 재주장 |
 | RabbitMQ 노드 1개 다운 | task · conflict 유실 0. telemetry 일부 유실 | quorum queue |
-| 노드 1개 다운 · drain (node-1~3 어느 것이든) | 위 셋이 동시에 일어나도 유지 | 데이터 계층 3노드 분산 |
+| worker 노드 1개 다운 · drain (worker-1~3 어느 것이든) | 위 셋이 동시에 일어나도 유지 | 데이터 계층 3 worker 분산 |
 
 ### 범위 밖
 
 | 항목 | 이유 | 비고 |
 |---|---|---|
-| 노드 2개 동시 다운 | 3노드 과반이 깨진다. Sentinel · Raft 모두 멈춤 | 설계상 한계로 명시 |
+| worker 2개 동시 다운 | 3노드 과반이 깨진다. Sentinel · Raft 모두 멈춤 | 설계상 한계로 명시 |
 | Simulator HA | 맵 상태를 가진 단일 프로세스. 재시작 = 새 epoch(01 "Redis 상태 소실 복구") | 재시작 시간만 측정 |
-| PostgreSQL HA | 단일 + local PV(Retain). 다운 중 이벤트는 quorum queue에 적체되고 복구 후 소비 | 사용자 확인 필요 (아래) |
-| k3s control plane HA | node-1 단일 server. 다운 시 스케줄링만 멈추고 기동 중인 pod는 유지 | 사용자 확인 필요 (아래) |
+| PostgreSQL HA | 단일 + local PV(Retain). 다운 중 이벤트는 quorum queue에 적체되고 복구 후 소비 | 사용자 확정 |
+| k3s control plane HA | cp-1 단일 server, 워크로드 없음. 다운 시 스케줄링만 멈추고 기동 중인 pod는 유지 | 사용자 확정 |
 
 > **멈춤은 허용, 겹침은 불허.** 어느 장애에서든 "로봇 두 대가 같은 칸" 이 나오는 것보다
 > 틱을 몇 초 멈추는 쪽을 택한다. 판단이 불확실하면 `409 state_lost`로 Simulator를 세운다.
@@ -85,19 +85,29 @@
 | leader를 세 노드에 분산 | 한 노드에 leader가 몰리면 그 노드 장애에 모든 큐가 동시에 재선출 |
 | **telemetry 발행 실패는 배치 실패가 아니다** | 노드 다운으로 telemetry 파티션이 수 분간 비면 01의 "하나라도 실패 → 503" 규칙이 task 이벤트까지 막는다. telemetry는 버리고 메트릭만 올린다. task · conflict 실패만 503 |
 
-### 데이터 계층 배치 — 3노드 분산
+### 노드 구성 — control plane 1 + worker 3
 
-기존 "데이터 계층 node-1 고정"을 폐기한다. 3복제는 세 노드에 흩어져야 의미가 있다.
+| 노드 | 역할 |
+|---|---|
+| cp-1 | k3s server. 워크로드 없음(taint) |
+| worker-1~3 | 애플리케이션, 데이터 계층, 모니터링 |
+
+control plane을 따로 두는 이유 — 데이터 계층과 앱이 어느 worker에 있든 과반 계산이 같고,
+worker drain 시연이 control plane을 건드리지 않는다. control plane은 1대로 충분하다(범위 밖 참조).
+
+### 데이터 계층 배치 — 3 worker 분산
+
+기존 "데이터 계층 node-1 고정"을 폐기한다. 3복제는 세 worker에 흩어져야 의미가 있다.
 
 | 컴포넌트 | 배치 | 근거 |
 |---|---|---|
-| Redis ×3, Sentinel ×3, RabbitMQ ×3 | 노드당 1개, **required anti-affinity** | 한 노드가 죽어도 과반이 남는다 |
-| PostgreSQL ×1 | node-1 고정 + local PV(Retain) | 범위 밖. 기존 설계 유지 |
-| FleetController ×2 | 서로 다른 노드, preferred anti-affinity | 노드 장애에 둘 다 죽지 않게 |
-| 나머지 애플리케이션 | 세 노드 모두 허용 | "node-2 / node-3만" 제한 폐기 |
+| Redis ×3, Sentinel ×3, RabbitMQ ×3 | worker당 1개, **required anti-affinity** | worker 하나가 죽어도 과반이 남는다 |
+| PostgreSQL ×1 | worker-1 고정 + local PV(Retain) | 범위 밖. 단일 유지 |
+| FleetController ×2 | 서로 다른 worker, preferred anti-affinity | 노드 장애에 둘 다 죽지 않게 |
+| 나머지 애플리케이션 · 모니터링 | 세 worker 모두 허용 | "node-2 / node-3만" 제한 폐기 |
 
-노드 역할은 "control plane · PostgreSQL · 애플리케이션 · 모니터링"이 어디에 붙느냐만 다르고,
-Redis · RabbitMQ 멤버는 세 노드 전부에 있다. 서버 권장 사양은 **16GB** 로 올린다.
+Redis · RabbitMQ 멤버는 세 worker 전부에 있고, worker별 차이는 PostgreSQL이 어디에 붙느냐뿐이다.
+worker 권장 사양은 **16GB** 로 올린다. cp-1은 소형이면 된다.
 
 ---
 
@@ -110,7 +120,8 @@ Redis · RabbitMQ 멤버는 세 노드 전부에 있다. 서버 권장 사양은
 | `WAIT 1` 매 배치 | 감지 창의 락 보존 | 배치당 왕복 1회 추가. 판정 p99 10ms 예산 안에서 흡수해야 한다 |
 | `min-replicas-to-write 1` | 고립 primary 쓰기 차단 | replica 2대가 동시에 빠지면 정상 primary도 쓰기 거부 → 틱 정지 |
 | quorum queue 32개 | task · conflict 유실 0 | classic보다 메모리 · 디스크 · 지연이 크다. telemetry를 classic으로 남기는 이유 |
-| 데이터 계층 3노드 분산 | 노드 장애 내성 | 모든 노드가 데이터 계층을 짊어진다. node-2 drain 시연도 데이터 계층 장애 조치를 동반한다 |
+| 데이터 계층 3 worker 분산 | worker 장애 내성 | 모든 worker가 데이터 계층을 짊어진다. worker drain 시연은 데이터 계층 장애 조치를 동반한다 |
+| control plane 전용 1대 | 워크로드와 분리, 과반 계산 단순 | 서버 4대. cp-1 단일이라 다운 시 스케줄링 정지 |
 
 ---
 
@@ -140,10 +151,10 @@ Redis · RabbitMQ 멤버는 세 노드 전부에 있다. 서버 권장 사양은
 | 7 | Redis 클라이언트 연결 | Sentinel 경유 primary 탐색. 장애 조치 후 재연결 시간이 1의 30초 안에 포함된다 |
 | 8 | quorum queue 설정 | 32개 quorum + 16개 classic. leader 분산, publisher confirm 유지, SAC 호환 확인, `x-delivery-limit` + DLQ, 메모리 상한 |
 | 9 | 01 멱등 2단계 수정 | telemetry 발행 실패는 drop + 메트릭. task · conflict만 503. `idem` 키 상태 전이에 반영 |
-| 10 | StatefulSet · anti-affinity · local PV | Redis 3, Sentinel 3, RabbitMQ 3 각각 노드당 1 (required). 각 노드에 PV 경로. PostgreSQL은 node-1 고정 유지. FleetController 2는 preferred |
-| 11 | 리소스 표 (02 갱신) | 16GB 서버 기준 request 합 8Gi 이하, limit = request × 2 유지 |
-| 12 | M8 장애 주입 시나리오 추가 (02 갱신) | Redis primary kill(겹침 0 · 틱 정지 시간), Sentinel 1 kill(무영향), RabbitMQ leader 노드 kill(task 유실 0 · telemetry 유실 수), FleetController 1대 kill 배치 처리 중(재전송 결과 동일), 데이터 계층이 있는 노드 drain. 시나리오마다 확인 사항과 측정 지표 |
-| 13 | 배포 구성도(`docs/images/deployment.svg`) 갱신 | "node-1 고정" · "node-2/3만 애플리케이션" 표기 제거 |
+| 10 | StatefulSet · anti-affinity · local PV | Redis 3, Sentinel 3, RabbitMQ 3 각각 worker당 1 (required). 각 worker에 PV 경로. PostgreSQL은 worker-1 고정. FleetController 2는 preferred. cp-1은 taint로 워크로드 배제 |
+| 11 | 리소스 표 (02 갱신) | worker 16GB 기준 request 합 8Gi 이하, limit = request × 2 유지. cp-1 사양 별도 |
+| 12 | M8 장애 주입 시나리오 추가 (02 갱신) | Redis primary kill(겹침 0 · 틱 정지 시간), Sentinel 1 kill(무영향), RabbitMQ leader 노드 kill(task 유실 0 · telemetry 유실 수), FleetController 1대 kill 배치 처리 중(재전송 결과 동일), worker drain. 시나리오마다 확인 사항과 측정 지표 |
+| 13 | 배포 구성도(`docs/images/deployment.svg`) 갱신 | cp-1 + worker-1~3 구성으로. "node-1 고정" · "node-2/3만 애플리케이션" 표기 제거 |
 
 ---
 
@@ -154,6 +165,6 @@ Redis · RabbitMQ 멤버는 세 노드 전부에 있다. 서버 권장 사양은
 | 총괄 결정 | FleetController 상한 2 | 3대 이상 금지. 판정 처리량이 부족하면 경로 계산 분리로 해결하고, 그래도 부족하면 04 "부분 분산" 실험으로 넘긴다 |
 | 총괄 결정 | telemetry 발행 실패는 배치 실패 아님 | 01 수정은 위임 항목 9 |
 | 총괄 결정 | M3부터 quorum 타입 선언 | 01 "M5 이후 전환" 문구 대체 |
-| 사용자 확인 필요 | PostgreSQL 단일 유지 | 총괄 제안: 범위 밖. 큐가 버퍼 역할을 하므로 복구 후 적재가 따라온다 |
-| 사용자 확인 필요 | k3s control plane 단일(node-1) | 총괄 제안: 범위 밖. 3 server + embedded etcd는 M8 이후 검토 |
-| 사용자 확인 필요 | 장애 조치 중 틱 정지 허용 상한 | 총괄 제안 30초. 이 값이 Sentinel 설정의 상한을 정한다 |
+| 사용자 확정 | PostgreSQL 단일 유지 | 범위 밖. 큐가 버퍼 역할을 하므로 복구 후 적재가 따라온다 |
+| 사용자 확정 | 노드 구성 cp-1 + worker-1~3 | control plane 1대 단일, 워크로드 없음. HA control plane은 범위 밖 |
+| 사용자 확정 | 장애 조치 중 틱 정지 허용 상한 30초 | 이 값이 Sentinel 설정의 상한을 정한다 |

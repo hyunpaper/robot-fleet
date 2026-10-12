@@ -118,14 +118,15 @@ Simulator ──(틱마다 배치 이동 요청)──► FleetController ◄─
 
 ## 배포 환경 (예정)
 
-자체 서버에 k3s 3노드로 구성한다. 아래 주소는 예시다.
+자체 서버에 k3s control plane 1대 + worker 3대로 구성한다. 아래 주소는 예시다.
 
 <a href="https://raw.githubusercontent.com/hyunpaper/robot-fleet/main/docs/images/deployment.svg"><img src="docs/images/deployment.svg" alt="배포 구성"></a>
 
 | 노드 | 주소 | 역할 |
 |---|---|---|
-| node-1 | 192.168.10.11 | control plane, PostgreSQL, Redis·RabbitMQ 멤버 |
-| node-2 | 192.168.10.12 | 애플리케이션, Redis·RabbitMQ 멤버 |
-| node-3 | 192.168.10.13 | 애플리케이션, 모니터링, Redis·RabbitMQ 멤버 |
+| cp-1 | 192.168.10.10 | control plane (워크로드 없음) |
+| worker-1 | 192.168.10.11 | 애플리케이션, PostgreSQL, Redis·RabbitMQ 멤버 |
+| worker-2 | 192.168.10.12 | 애플리케이션, Redis·RabbitMQ 멤버 |
+| worker-3 | 192.168.10.13 | 애플리케이션, 모니터링, Redis·RabbitMQ 멤버 |
 
-Redis(primary 1 + replica 2 + Sentinel 3)와 RabbitMQ(3노드, quorum queue)는 세 노드에 분산된다. → 07
+Redis(primary 1 + replica 2 + Sentinel 3)와 RabbitMQ(3노드, quorum queue)는 worker 3대에 분산된다. → 07
