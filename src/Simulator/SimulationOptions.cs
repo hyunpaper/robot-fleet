@@ -16,9 +16,16 @@ public sealed record SimulationOptions
     public int TurnMsPer90 { get; init; } = 300;     // 03 문서
     public int RenderEveryTicks { get; init; } = 5;  // 맵 그리기 주기. 0이면 안 그림
     public long MaxTicks { get; init; } = 100_000;   // 안전장치
+    public int? Robots { get; init; }                // null이면 M1 단일 로봇 모드
+    public double Lambda { get; init; } = 0.5;
+    public int Seed { get; init; } = 1;
+    public Uri? IngestUrl { get; init; }
+    public string? SendLogDirectory { get; init; }
+    public int? MetricsPort { get; init; }
 
     public const string Usage =
-        "usage: --map <path> [--start x,y] [--goal x,y] [--heading N|E|S|W] [--speed 1.0] [--tick 100] [--render 5] [--max-ticks N]";
+        "usage: --map <path> [--start x,y] [--goal x,y] [--heading N|E|S|W] [--speed 1.0] [--tick 100] [--render 5] [--max-ticks N]\n"
+        + "       fleet mode: --robots N [--lambda 0.5] [--seed 1] [--ingest url] [--sendlog dir] [--metrics-port p]";
 
     /// <summary>
     /// 명령행 파싱. --start/--goal 기본값(첫 Parking/첫 Station)이 맵에 의존하므로 맵 로더를 받아 맵도 함께 돌려준다.
@@ -39,7 +46,8 @@ public sealed record SimulationOptions
 
         foreach (var key in values.Keys)
         {
-            if (key is not ("--map" or "--start" or "--goal" or "--heading" or "--speed" or "--tick" or "--render" or "--max-ticks"))
+            if (key is not ("--map" or "--start" or "--goal" or "--heading" or "--speed" or "--tick" or "--render" or "--max-ticks"
+                or "--robots" or "--lambda" or "--seed" or "--ingest" or "--sendlog" or "--metrics-port"))
                 throw new ArgumentException($"unknown option '{key}'");
         }
 
@@ -67,6 +75,12 @@ public sealed record SimulationOptions
             TickMs = values.TryGetValue("--tick", out var t) ? (int)ParseLong("--tick", t, min: 1) : defaults.TickMs,
             RenderEveryTicks = values.TryGetValue("--render", out var r) ? (int)ParseLong("--render", r, min: 0) : defaults.RenderEveryTicks,
             MaxTicks = values.TryGetValue("--max-ticks", out var m) ? ParseLong("--max-ticks", m, min: 1) : defaults.MaxTicks,
+            Robots = values.TryGetValue("--robots", out var rb) ? (int)ParseLong("--robots", rb, min: 1) : null,
+            Lambda = values.TryGetValue("--lambda", out var lm) ? ParseDouble("--lambda", lm, min: 0) : defaults.Lambda,
+            Seed = values.TryGetValue("--seed", out var sd) ? (int)ParseLong("--seed", sd, min: int.MinValue) : defaults.Seed,
+            IngestUrl = values.TryGetValue("--ingest", out var ig) ? ParseUrl("--ingest", ig) : null,
+            SendLogDirectory = values.TryGetValue("--sendlog", out var sl) ? sl : null,
+            MetricsPort = values.TryGetValue("--metrics-port", out var mp) ? (int)ParseRange("--metrics-port", mp, 1, 65535) : null,
         };
         return (options, map);
     }
@@ -94,6 +108,20 @@ public sealed record SimulationOptions
     {
         if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) || v < min)
             throw new ArgumentException($"{name} must be a number >= {min.ToString(CultureInfo.InvariantCulture)} but was '{text}'");
+        return v;
+    }
+
+    private static Uri ParseUrl(string name, string text)
+    {
+        if (!Uri.TryCreate(text, UriKind.Absolute, out var uri) || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            throw new ArgumentException($"{name} must be an absolute http/https URL but was '{text}'");
+        return uri;
+    }
+
+    private static long ParseRange(string name, string text, long min, long max)
+    {
+        var v = ParseLong(name, text, min);
+        if (v > max) throw new ArgumentException($"{name} must be an integer between {min} and {max} but was '{text}'");
         return v;
     }
 

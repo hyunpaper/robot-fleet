@@ -58,4 +58,47 @@ public class SimulationOptionsTests
         var act = () => SimulationOptions.Parse(Array.Empty<string>(), Load);
         act.Should().Throw<ArgumentException>();
     }
+
+    [Fact]
+    public void Parse_WithoutRobots_IsM1Mode()
+    {
+        var (o, _) = SimulationOptions.Parse(new[] { "--map", "m.json" }, Load);
+
+        o.Robots.Should().BeNull();
+        o.Lambda.Should().Be(0.5);
+        o.Seed.Should().Be(1);
+        o.IngestUrl.Should().BeNull();
+        o.SendLogDirectory.Should().BeNull();
+        o.MetricsPort.Should().BeNull();
+    }
+
+    [Fact]
+    public void Parse_FleetOptions()
+    {
+        var (o, _) = SimulationOptions.Parse(
+            new[] { "--map", "m.json", "--robots", "20", "--lambda", "0", "--seed", "-7", "--ingest", "http://localhost:5000", "--sendlog", "logs", "--metrics-port", "9100" },
+            Load);
+
+        o.Robots.Should().Be(20);
+        o.Lambda.Should().Be(0);
+        o.Seed.Should().Be(-7);
+        o.IngestUrl.Should().Be(new Uri("http://localhost:5000"));
+        o.SendLogDirectory.Should().Be("logs");
+        o.MetricsPort.Should().Be(9100);
+    }
+
+    [Theory]
+    [InlineData("--robots", "0")]
+    [InlineData("--robots", "x")]
+    [InlineData("--lambda", "-0.1")]
+    [InlineData("--seed", "1.5")]
+    [InlineData("--ingest", "localhost:5000")]
+    [InlineData("--ingest", "ftp://localhost")]
+    [InlineData("--metrics-port", "0")]
+    [InlineData("--metrics-port", "65536")]
+    public void Parse_InvalidFleetOption_Throws(string key, string value)
+    {
+        var act = () => SimulationOptions.Parse(new[] { "--map", "m.json", key, value }, Load);
+        act.Should().Throw<ArgumentException>();
+    }
 }

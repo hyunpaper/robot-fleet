@@ -1,10 +1,14 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using RobotFleet.FleetController.Arbitration;
 using RobotFleet.FleetController.Planning;
 using RobotFleet.Shared.Domain;
 using RobotFleet.Shared.Map;
+using Prometheus;
 using RobotFleet.Simulator;
+using RobotFleet.Simulator.Events;
+using RobotFleet.Simulator.Fleet;
 
 Console.OutputEncoding = new UTF8Encoding(false);
 
@@ -26,6 +30,55 @@ catch (Exception ex) when (ex is ArgumentException or IOException or JsonExcepti
     return 1;
 }
 
+using var cts = new CancellationTokenSource();
+Console.CancelKeyPress += (_, e) =>
+{
+    e.Cancel = true;   // 프로세스를 바로 죽이지 않고 루프가 130으로 끝나게
+    cts.Cancel();
+};
+
+if (options.Robots is { } robotCount)
+{
+    var fleetOptions = new FleetOptions
+    {
+        Robots = robotCount,
+        Lambda = options.Lambda,
+        Seed = options.Seed,
+        TickMs = options.TickMs,
+        SpeedFactor = options.SpeedFactor,
+        MaxTicks = options.MaxTicks,
+    };
+    Console.WriteLine($"map {map.MapId} v{map.Version} {map.Width}x{map.Height}  fleet robots {robotCount}");
+
+    using var metricServer = options.MetricsPort is { } metricsPort ? new MetricServer(metricsPort).Start() : null;
+    ITickDelay fleetDelay = options.SpeedFactor > 0 ? new RealTimeDelay() : new NoDelay();
+    var fleetRenderer = new ConsoleRenderer(Console.Out, map, options.TickMs, options.RenderEveryTicks);
+
+    if (options.IngestUrl is null)
+    {
+        var noSink = await new FleetSimulation(map, fleetOptions, null, fleetDelay, fleetRenderer).RunAsync(cts.Token);
+        return noSink.ExitCode;
+    }
+
+    using var http = new HttpClient { BaseAddress = options.IngestUrl };
+    var runId = DateTime.UtcNow.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture);
+    using var sendLog = options.SendLogDirectory is { } logDir ? new SendLog(logDir, map.MapId, runId) : null;
+    await using var sender = new EventBatchSender(new HttpIngestClient(http), sendLog, new EventSenderOptions(), TimeProvider.System);
+
+    // 송신 루프는 Ctrl+C와 별개로 Drain이 끝날 때까지 돌린다
+    using var senderCts = new CancellationTokenSource();
+    var sendLoop = Task.Run(() => sender.RunAsync(senderCts.Token));
+
+    var result = await new FleetSimulation(map, fleetOptions, sender, fleetDelay, fleetRenderer).RunAsync(cts.Token);
+    var unsent = await sender.DrainAsync(CancellationToken.None);
+    senderCts.Cancel();
+    try { await sendLoop; }
+    catch (OperationCanceledException) { }
+
+    Console.WriteLine($"unsent {unsent}");
+    return unsent > 0 ? 5 : result.ExitCode;
+}
+
 Console.WriteLine($"map {map.MapId} v{map.Version} {map.Width}x{map.Height}  start {options.Start}  goal {options.Goal}");
 
 var robot = new Robot
@@ -43,13 +96,6 @@ var task = new TransportTask
     Origin = options.Start,
     Destination = options.Goal,
     CreatedAt = DateTimeOffset.UtcNow,
-};
-
-using var cts = new CancellationTokenSource();
-Console.CancelKeyPress += (_, e) =>
-{
-    e.Cancel = true;   // 프로세스를 바로 죽이지 않고 루프가 130으로 끝나게
-    cts.Cancel();
 };
 
 ITickDelay delay = options.SpeedFactor > 0 ? new RealTimeDelay() : new NoDelay();
