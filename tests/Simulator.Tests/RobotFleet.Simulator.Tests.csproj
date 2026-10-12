@@ -15,6 +15,9 @@
     <ProjectReference Include="../../src/FleetController/RobotFleet.FleetController.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="../Shared.Tests/TestMaps.cs" Link="TestMaps.cs" />
+  </ItemGroup>
+  <ItemGroup>
     <Content Include="../../maps/*.json" Link="maps/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

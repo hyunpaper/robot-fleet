@@ -13,7 +13,7 @@ public class ConsoleRendererTests
         GridMap.FromDefinition(new MapDefinition("t", 1, 5, 5, 1.0, Enumerable.Repeat("11111", 5).ToArray(),
             Array.Empty<StationDef>(), Array.Empty<ChargerDef>(), Array.Empty<ParkingDef>()));
 
-    // T-11 중 로그 포맷 부분. 루프 연동(MOVE 3줄 등)은 SimulationLoop 구현 후 추가
+    // T-11 중 로그 포맷 부분. 루프 연동(MOVE 3줄 등)은 SimulationLoopTests
     [Fact]
     public void EventLog_FollowsFixedFormat()
     {

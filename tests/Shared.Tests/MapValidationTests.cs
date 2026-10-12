@@ -146,4 +146,16 @@ public class MapValidationTests
         var act = () => MapLoader.LoadFromJson("{}");
         act.Should().Throw<MapValidationException>().Which.Errors.Should().Contain("mapId is required");
     }
+
+    [Fact] // 목록의 null 항목은 NullReferenceException이 아니라 검증 오류
+    public void NullListEntry_IsValidationError()
+    {
+        const string json = """
+            { "mapId": "m", "version": 1, "width": 2, "height": 1, "cellSizeMeters": 1.0, "grid": ["11"],
+              "stations": [null], "chargers": [], "parkings": [null, null] }
+            """;
+        var act = () => MapLoader.LoadFromJson(json);
+        act.Should().Throw<MapValidationException>().Which.Errors.Should()
+            .Equal("stations[0] is null", "parkings[0] is null", "parkings[1] is null");
+    }
 }
