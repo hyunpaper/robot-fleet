@@ -36,58 +36,6 @@
 
 ---
 
-## 실행
-
-.NET 8 SDK가 필요하다.
-
-```bash
-dotnet build
-dotnet test
-
-# 기본 시나리오: 주차 구역 (0,39) → 스테이션 (6,3)
-dotnet run --project src/Simulator -- --map maps/factory-a.json --start 0,39 --goal 6,3
-
-# 대기 없이 결과만 보기
-dotnet run --project src/Simulator -- --map maps/factory-a.json --speed 0 --render 0
-```
-
-| 옵션 | 기본값 | 설명 |
-|---|---|---|
-| `--map` | (필수) | 맵 파일 경로 |
-| `--start` / `--goal` | 첫 주차 구역 / 첫 스테이션 | `x,y` |
-| `--heading` | `N` | 시작 방향 `N` `E` `S` `W` |
-| `--speed` | `1.0` | 배속. `0`이면 대기 없이 실행 |
-| `--tick` | `100` | 틱 길이(ms) |
-| `--render` | `5` | 맵을 몇 틱마다 그릴지. `0`이면 생략 |
-| `--max-ticks` | `100000` | 이 틱 수를 넘기면 종료 |
-
-종료 코드는 `0` 도착, `2` 경로 없음, `3` 최대 틱 초과, `130` 중단(Ctrl+C)이다.
-
-출력 예시:
-
-```
-[t=000001 0.1s] R-001 PLAN    (0,39)N → (6,3)   steps=42 cost=43.0 expanded=136 in 2.3ms
-[t=000341 34.1s] R-001 TURN    N → E
-[t=000344 34.4s] R-001 MOVE    (0,5) → (1,5)
-[t=000404 40.4s] R-001 TURN    E → N
-[t=000427 42.7s] R-001 ARRIVED (6,3)   ticks=427 moves=42 turns=2 overrun=0
-```
-
-### GIF 다시 만들기
-
-GIF는 실제 시뮬레이터 로직(A*, RobotStepper)으로 뽑은 트레이스를 그린 것이다. 시나리오는 [tools/TraceExport/Scenario.cs](tools/TraceExport/Scenario.cs)에 있다.
-
-```bash
-dotnet run --project tools/TraceExport -- --map maps/factory-a.json --out artifacts/trace/factory-a.json
-pip install -r tools/render/requirements.txt
-python tools/render/render_gif.py artifacts/trace/factory-a.json docs/images/fleet-3d.gif --view iso
-python tools/render/render_gif.py artifacts/trace/factory-a.json docs/images/fleet-2d.gif --view 2d
-```
-
-TraceExport는 같은 틱에 두 로봇이 같은 칸을 점유하면 exit 4로 끝난다.
-
----
-
 ## 구조
 
 ```
@@ -160,5 +108,3 @@ Simulator ──(틱마다 배치 이동 요청)──► FleetController ◄─
 | node-1 | 192.168.10.11 | control plane, PostgreSQL, RabbitMQ |
 | node-2 | 192.168.10.12 | 애플리케이션 |
 | node-3 | 192.168.10.13 | 애플리케이션, 모니터링 |
-
-접속 정보, 인증서, kubeconfig, `.env` 같은 설정 파일은 저장소에 올리지 않는다(`.gitignore` 참고).
