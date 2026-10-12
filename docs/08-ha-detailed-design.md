@@ -690,7 +690,7 @@ FleetController 배치 처리 중 kill은 시점을 고정해야 재현된다. �
 
 ## 13. 배포 구성도 변경 명세
 
-`docs/images/deployment.svg`를 하위 에이전트가 고친다. 바뀌어야 할 요소만 적는다. 레이아웃은 자유.
+`docs/images/deployment-ha.svg`를 하위 에이전트가 고친다. 바뀌어야 할 요소만 적는다. 레이아웃은 자유.
 
 | # | 요소 | 현재 | 변경 |
 |---|---|---|---|
@@ -779,7 +779,7 @@ FleetController 배치 처리 중 kill은 시점을 고정해야 재현된다. �
 - [ ] [단순 S4] `deploy/k3s/apps/{fleet-controller,ingest-api,event-worker,query-api,simulator}.yaml`, `deploy/k3s/system/coredns-patch.yaml` — 02 리소스 표, preferred anti-affinity, headless Service, PDB, `preStop`
 - [ ] [핵심] `deploy/k3s/redis/init-role.sh` — §10 역할 결정 표
 - [ ] [핵심] cp-1 + worker 3 기동 검증: anti-affinity · PV 바인딩 · quorum 멤버 3 · 리더 분산 · 장애 조치 1회 수동 확인
-- [ ] [단순] (위 묶음 완료 후) `docs/images/deployment.svg` — §13 명세
+- [x] [단순] (위 묶음 완료 후) `docs/images/deployment-ha.svg` — §13 명세
 
 ### M8 — 장애 주입
 
