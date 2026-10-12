@@ -1,5 +1,74 @@
+# Build
 bin/
 obj/
-.vs/
-*.user
+out/
+publish/
+artifacts/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+*.nupkg
+*.snupkg
+
+# Test / coverage
 TestResults/
+coverage/
+*.coverage
+*.coveragexml
+coverage.*.xml
+*.trx
+
+# IDE
+.vs/
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.user
+*.suo
+*.userprefs
+*.sln.docstates
+*.DotSettings.user
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Python (tools/)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Logs
+*.log
+logs/
+
+# Local / secret config
+.env
+.env.*
+!.env.example
+appsettings.Development.json
+appsettings.Local.json
+appsettings.*.local.json
+secrets.json
+*.secret.yaml
+*.secret.yml
+deploy/**/secrets/
+deploy/**/*-secret.yaml
+kubeconfig
+*.kubeconfig
+registries.yaml
+*.pfx
+*.pem
+*.key
+*.crt
+
+# Runtime data
+data/
+*.db
+*.rdb
+*.aof

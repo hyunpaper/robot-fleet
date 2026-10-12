@@ -480,7 +480,7 @@ public sealed class RobotAction
 
 ### 틱 처리 순서 (로봇 1대)
 
-`RobotStepper.Step(robot, tick)`이 **매 틱 아래 순서를 정확히** 수행한다. 한 틱에 동작 시작은 최대 1회.
+`RobotStepper.StepAsync(robot, tick)`이 **매 틱 아래 순서를 정확히** 수행한다. 한 틱에 동작 시작은 최대 1회.
 
 ```
 1. [계획]  Status == Idle && 작업 있음 && PlannedPath 비어 있음
@@ -564,9 +564,7 @@ public sealed class SimulationLoop
         while (!ct.IsCancellationRequested)
         {
             var sw = Stopwatch.StartNew();
-            stats.Tick++;
-            var @continue = await StepOnceAsync(ct);
-            renderer?.OnTick(stats.Tick, robot);
+            var @continue = await StepOnceAsync(ct);   // stats.Tick++ 와 renderer.OnTick 은 StepOnceAsync 안에서
             if (!@continue) break;
 
             if (options.SpeedFactor > 0)
@@ -582,12 +580,12 @@ public sealed class SimulationLoop
 }
 ```
 
-`StepOnceAsync` 안에서 `RobotStepper.Step`을 호출하고, M2에서는 "모든 로봇의 요청 수집 → `DecideAsync` 1회 → 각 로봇 적용"으로 바뀐다.
+`StepOnceAsync` 안에서 틱을 올리고 `RobotStepper.StepAsync`를 호출하고, M2에서는 "모든 로봇의 요청 수집 → `DecideAsync` 1회 → 각 로봇 적용"으로 바뀐다.
 M1은 로봇 1대라 `RobotStepper`가 직접 `DecideAsync`를 부르지만, **요청 생성과 결정 적용을 별도 메서드**로 나눠 둔다:
 
 ```csharp
 public MoveRequest? BuildMoveRequest(Robot robot, long tick);                // 2단계 "else" 분기까지 (회전·도착이면 null)
-public void Apply(Robot robot, long tick, MoveDecision? decision);          // 나머지
+public ValueTask ApplyAsync(Robot robot, long tick, MoveDecision? decision); // 나머지 (락 해제가 비동기라 ValueTask)
 ```
 
 ### 콘솔 출력 형식
