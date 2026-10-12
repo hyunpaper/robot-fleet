@@ -1,2 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <!-- GridMap.CreateUnchecked(검증 생략 생성)는 테스트 전용 -->
+    <InternalsVisibleTo Include="RobotFleet.Shared.Tests" />
+    <InternalsVisibleTo Include="RobotFleet.FleetController.Tests" />
+    <InternalsVisibleTo Include="RobotFleet.Simulator.Tests" />
+  </ItemGroup>
 </Project>

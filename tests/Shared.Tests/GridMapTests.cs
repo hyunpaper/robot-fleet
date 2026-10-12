@@ -33,7 +33,7 @@ public class GridMapTests
     [Fact]
     public void IsWalkable_BlockedCell_False()
     {
-        var map = TestMaps.FromRows("101");
+        var map = TestMaps.FromRows("101", "111");   // V14 때문에 섬 없이
         map.IsWalkable(new Point(1, 0)).Should().BeFalse();
         map.IsWalkable(new Point(0, 0)).Should().BeTrue();
     }
