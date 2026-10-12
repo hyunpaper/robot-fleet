@@ -85,6 +85,7 @@ Simulator ──(틱마다 배치 이동 요청)──► FleetController ◄─
 | [06-m1-design](docs/06-m1-design.md) | M1 상세 설계와 테스트 목록 |
 | [07-high-availability](docs/07-high-availability.md) | 관제 서버 2대, Redis Sentinel, RabbitMQ quorum queue, 3노드 분산 |
 | [08-ha-detailed-design](docs/08-ha-detailed-design.md) | 해시 체인 워터마크, Lua 규약, Sentinel·큐 설정 값, 노드 배치, 장애 주입 측정 |
+| [09-m3-pipeline](docs/09-m3-pipeline.md) | M3 범위, 서비스 경계, 유실 0 증명 방법, 테스트 전략 |
 
 ---
 
