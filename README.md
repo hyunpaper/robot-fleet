@@ -120,7 +120,7 @@ Simulator ──(틱마다 배치 이동 요청)──► FleetController ◄─
 
 자체 서버에 k3s control plane 1대 + worker 3대로 구성한다. 아래 주소는 예시다.
 
-<a href="https://raw.githubusercontent.com/hyunpaper/robot-fleet/main/docs/images/deployment.svg"><img src="docs/images/deployment.svg" alt="배포 구성"></a>
+<a href="https://raw.githubusercontent.com/hyunpaper/robot-fleet/main/docs/images/deployment-ha.svg"><img src="docs/images/deployment-ha.svg" alt="배포 구성"></a>
 
 | 노드 | 주소 | 역할 |
 |---|---|---|
