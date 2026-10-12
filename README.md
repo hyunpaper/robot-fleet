@@ -33,14 +33,27 @@
 | 단계 | 내용 | 상태 |
 |---|---|---|
 | M1 | 맵 로드·검증, A* 경로 탐색(회전 비용 포함), 단일 로봇 시뮬레이션 | 완료 |
-| M2 | 다중 로봇, 충돌 회피, 교착 탐지·해소 | 진행 중 |
-| M3 | Ingest API + RabbitMQ + Worker로 이벤트 파이프라인 분리 | |
+| M2 | 다중 로봇, 충돌 회피, 교착 탐지·해소 | 충돌 회피 완료, 교착 해소 남음 |
+| M3 | Ingest API + RabbitMQ + Worker로 이벤트 파이프라인 분리 | 구현 완료, 실서버 검증 남음 |
 | M4 | 락·상태·멱등 키를 Redis로 이전, 관제 서버 2대(재전송 멱등, 장애 조치 감지) | |
 | M5 | k3s 배포, nginx ingress, Redis Sentinel·RabbitMQ 3노드, 스케일 아웃 | |
 | M6 | Prometheus + Grafana, 실시간 관제 화면 | |
 | M7 | 실험: 로봇 수별 처리량, 회피 전략·우선순위 정책 비교 | |
 | M8 | 장애 주입: pod 강제 종료, Redis·브로커 장애 조치, 노드 drain, 네트워크 지연 | |
 | M9 | 교착 분석 에이전트: 원인 진단, 수정안 생성, 승인 후 자동 배포 | |
+
+### 남은 작업
+
+| 단계 | 할 일 |
+|---|---|
+| M2 | 대기 그래프 순환 탐지, 회피 지점 양보, 1칸 통로 정면 대치 해소 |
+| M3 | 실서버 통합 테스트 41건 실행, 워커 kill·Ingest 재시작 포함 30분 E2E로 유실 0·중복 0 확인 |
+| M4 | Redis 이동 판정기(해시 체인 워터마크, 커밋·재주장 Lua), 관제 서버 2대 재전송 멱등, 장애 조치 감지 |
+| M5 | cp-1 + worker 3 k3s 구성, Redis Sentinel·RabbitMQ 3노드 배포, quorum 멤버 확장 |
+| M6 | Prometheus 수집, Grafana 대시보드, 실시간 관제 화면(QueryApi·WebSocket) |
+| M7 | 로봇 수별 처리량, 회피 전략·우선순위 정책·통로 폭·혼잡 가중치 비교 실험 |
+| M8 | Redis primary·RabbitMQ leader·관제 서버·노드 장애 주입, 겹침 0·유실 0·정지 시간 측정 |
+| M9 | 교착 이력 기반 원인 진단, 수정안 생성, 승인 후 배포 파이프라인 |
 
 ---
 
@@ -49,17 +62,21 @@
 ```
 robot-fleet/
 ├── src/
-│   ├── Shared/            좌표, 맵 로더·검증, 도메인 모델
-│   ├── FleetController/   A* 경로 계획, 이동 승인
-│   └── Simulator/         틱 루프, 로봇 이동, 콘솔 출력
-├── tests/                 xUnit 테스트 (Shared / FleetController / Simulator)
-├── maps/
-│   ├── factory-a.json     60×40 공장 맵
-│   └── test-corridor.json 9×7 테스트 맵 (1칸 통로)
-└── docs/                  설계 문서
+│   ├── Shared/                  좌표, 맵, 도메인 모델, 이벤트 계약, 파이프라인 인터페이스
+│   ├── FleetController/         A* 경로 계획, 이동 판정
+│   ├── Simulator/               틱 루프, 다중 로봇, 작업 생애주기, 이벤트 송신
+│   ├── IngestApi/               이벤트 수신, 멱등 검사, 큐 발행 (로직은 Ingest.Core)
+│   ├── EventWorker/             파티션 소비, 배치 적재, 집계, 재배정 (로직은 EventWorker.Core)
+│   ├── Infrastructure.*/        RabbitMQ, Redis, PostgreSQL 구현
+│   ├── Hosting/                 공용 구성, 헬스 체크
+│   └── Reconcile/               송신 로그와 적재 결과 대조
+├── tests/                       순수 로직 테스트, 실서버 통합 테스트
+├── db/migrations/               스키마, 일 단위 파티션
+├── maps/                        공장 맵 정의
+└── docs/                        설계 문서
 ```
 
-이후 단계에서 `IngestApi`, `EventWorker`, `QueryApi`, `deploy/`, `loadtest/`가 추가된다.
+이후 단계에서 `QueryApi`, `deploy/`, `loadtest/`가 추가된다.
 
 ---
 
