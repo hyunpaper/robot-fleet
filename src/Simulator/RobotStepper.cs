@@ -20,10 +20,13 @@ public sealed class RobotStepper
     private readonly SimulationStats _stats;
     private readonly ConsoleRenderer? _renderer;
     private readonly Dictionary<string, State> _states = new();
+    private readonly IRobotObserver? _observer;
 
+    /// observer: 상태 전이 · 거부를 관찰한다(M3 이벤트 수집). 동작에는 영향이 없다
     public RobotStepper(GridMap map, IPathPlanner planner, IMoveArbiter arbiter, SimulationOptions options,
-                        SimulationStats stats, ConsoleRenderer? renderer)
+                        SimulationStats stats, ConsoleRenderer? renderer, IRobotObserver? observer = null)
     {
+        _observer = observer;
         _map = map;
         _planner = planner;
         _arbiter = arbiter;
@@ -83,14 +86,14 @@ public sealed class RobotStepper
             var result = _planner.FindPath(_map, robot.Position, robot.Heading, task.Destination);
             if (!result.IsSuccess)
             {
-                robot.Status = RobotStatus.Error;
+                SetStatus(robot, RobotStatus.Error, tick);
                 task.Status = TaskStatus.Failed;
                 _renderer?.LogNoPath(tick, robot.RobotId, robot.Position, task.Destination, result.Status);
                 return null;
             }
             robot.PlannedPath = result.Steps;
             robot.PathIndex = 0;
-            robot.Status = RobotStatus.Moving;
+            SetStatus(robot, RobotStatus.Moving, tick);
             task.Status = TaskStatus.InProgress;
             _renderer?.LogPlan(tick, robot.RobotId, robot.Position, robot.Heading, task.Destination, result);
         }
@@ -136,12 +139,13 @@ public sealed class RobotStepper
                 // 이 틱은 제자리. 다음 틱에 대기 시간을 실어 재요청한다
                 if (robot.Status != RobotStatus.Waiting)
                     _renderer?.LogWait(tick, robot.RobotId, robot.Position, d.Reason);
-                robot.Status = RobotStatus.Waiting;
+                _observer?.OnDenied(robot, d, next.Cell, tick);
+                SetStatus(robot, RobotStatus.Waiting, tick);
                 state.WaitMs += _options.TickMs;
                 state.Carry = 0;
                 return;
             }
-            robot.Status = RobotStatus.Moving;   // Waiting이었다면 path_cleared
+            SetStatus(robot, RobotStatus.Moving, tick);   // Waiting이었다면 path_cleared
             state.WaitMs = 0;
             state.Action = new RobotAction { Kind = RobotActionKind.Move, TargetCell = next.Cell, RemainingMs = _options.MoveMsPerCell + state.Carry };
             state.ActionMs = _options.MoveMsPerCell;
@@ -174,9 +178,16 @@ public sealed class RobotStepper
         state.Action = null;
     }
 
+    private void SetStatus(Robot robot, RobotStatus status, long tick)
+    {
+        var from = robot.Status;
+        robot.Status = status;
+        if (from != status) _observer?.OnStatusChanged(robot, from, status, tick);
+    }
+
     private void Arrive(Robot robot, State state, long tick)
     {
-        robot.Status = RobotStatus.Idle;
+        SetStatus(robot, RobotStatus.Idle, tick);
         robot.PlannedPath = Array.Empty<PathStep>();
         robot.PathIndex = 0;
         robot.CurrentTaskId = null;

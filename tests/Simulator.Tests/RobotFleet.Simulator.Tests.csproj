@@ -8,11 +8,13 @@
     <PackageReference Include="xunit" Version="2.9.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
     <PackageReference Include="FluentAssertions" Version="6.12.2" />
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" Version="8.10.0" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/Simulator/RobotFleet.Simulator.csproj" />
     <ProjectReference Include="../../src/Shared/RobotFleet.Shared.csproj" />
     <ProjectReference Include="../../src/FleetController/RobotFleet.FleetController.csproj" />
+    <ProjectReference Include="../../src/Infrastructure.InMemory/RobotFleet.Infrastructure.InMemory.csproj" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="../Shared.Tests/TestMaps.cs" Link="TestMaps.cs" />

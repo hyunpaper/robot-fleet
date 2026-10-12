@@ -25,6 +25,6 @@ public sealed record FleetOptions
     public long MaxTicks { get; init; } = 100_000;
 }
 
-/// ExitCode: 0 정상(MaxTicks 또는 취소), 4 송신 400(검증 실패)
+/// ExitCode: 0 MaxTicks 도달, 4 송신 버퍼 닫힘(400 등), 130 취소
 public sealed record FleetRunResult(long Ticks, int TasksCreated, int TasksCompleted, int TasksFailed,
     long Overruns, TimeSpan StallTime, int ExitCode);
