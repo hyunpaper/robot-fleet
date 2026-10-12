@@ -1,123 +1,164 @@
-# Robot Fleet Management System
+# Robot Fleet
 
-공장 내부를 돌아다니는 물류 로봇(AMR)의 **관제 · 충돌 회피 · 효율 분석** 시스템.
+공장 물류 로봇(AMR) 관제 시스템. 경로 계획, 충돌 회피, 교착 해소를 처리하고
+운행 이벤트를 모아 "이 맵에서 로봇은 몇 대가 적당한가"를 수치로 답하는 것이 목표다.
 
-가상 공장 맵 위에서 로봇 수십~수백 대가 작업을 수행하고, 그 과정에서 발생하는
-위치·상태·충돌 이벤트를 실시간으로 수집해 운영 지표로 환산한다.
+가상 공장 맵 위에서 시뮬레이터가 로봇을 움직이고, 관제 서버가 매 틱 이동을 승인한다.
+실제 장비 대신 시뮬레이터를 데이터 소스로 쓰기 때문에 로봇 수와 틱 주기만 바꿔서 부하를 자유롭게 조절할 수 있다.
+
+![3D 시뮬레이션](docs/images/fleet-3d.gif)
+
+<details>
+<summary>2D 탑뷰</summary>
+
+![2D 시뮬레이션](docs/images/fleet-2d.gif)
+
+</details>
+
+로봇이 지나간 칸은 그 로봇의 색으로 칠해진다. 회색 블록은 설비, 바닥색이 다른 칸은 스테이션·충전소·주차 구역이다.
 
 ---
 
-## 왜 이 주제인가
+## 현재 상태
 
-| 관점 | 내용 |
+| 단계 | 내용 | 상태 |
+|---|---|---|
+| M1 | 맵 로드·검증, A* 경로 탐색(회전 비용 포함), 단일 로봇 시뮬레이션 | 완료 |
+| M2 | 다중 로봇, 충돌 회피, 교착 탐지·해소 | 진행 예정 |
+| M3 | Ingest API + RabbitMQ + Worker로 이벤트 파이프라인 분리 | |
+| M4 | 락·상태·멱등 키를 Redis로 이전, 관제 서버 다중 인스턴스 | |
+| M5 | k3s 배포, nginx ingress, 스케일 아웃 | |
+| M6 | Prometheus + Grafana, 실시간 관제 화면 | |
+| M7 | 실험: 로봇 수별 처리량, 회피 전략·우선순위 정책 비교 | |
+| M8 | 장애 주입: pod 강제 종료, 브로커 재시작, 네트워크 지연 | |
+
+> 위 GIF는 M1 단계 결과물이다. 아직 충돌 회피가 없어서, 경로가 같은 시각에 겹치지 않도록 출발지와 목적지를 골라 돌렸다.
+
+---
+
+## 실행
+
+.NET 8 SDK가 필요하다.
+
+```bash
+dotnet build
+dotnet test
+
+# 기본 시나리오: 주차 구역 (0,39) → 스테이션 (6,3)
+dotnet run --project src/Simulator -- --map maps/factory-a.json --start 0,39 --goal 6,3
+
+# 대기 없이 결과만 보기
+dotnet run --project src/Simulator -- --map maps/factory-a.json --speed 0 --render 0
+```
+
+| 옵션 | 기본값 | 설명 |
+|---|---|---|
+| `--map` | (필수) | 맵 파일 경로 |
+| `--start` / `--goal` | 첫 주차 구역 / 첫 스테이션 | `x,y` |
+| `--heading` | `N` | 시작 방향 `N` `E` `S` `W` |
+| `--speed` | `1.0` | 배속. `0`이면 대기 없이 실행 |
+| `--tick` | `100` | 틱 길이(ms) |
+| `--render` | `5` | 맵을 몇 틱마다 그릴지. `0`이면 생략 |
+| `--max-ticks` | `100000` | 이 틱 수를 넘기면 종료 |
+
+종료 코드는 `0` 도착, `2` 경로 없음, `3` 최대 틱 초과, `130` 중단(Ctrl+C)이다.
+
+출력 예시:
+
+```
+[t=000001 0.1s] R-001 PLAN    (0,39)N → (6,3)   steps=42 cost=43.0 expanded=136 in 2.3ms
+[t=000341 34.1s] R-001 TURN    N → E
+[t=000344 34.4s] R-001 MOVE    (0,5) → (1,5)
+[t=000404 40.4s] R-001 TURN    E → N
+[t=000427 42.7s] R-001 ARRIVED (6,3)   ticks=427 moves=42 turns=2 overrun=0
+```
+
+### GIF 다시 만들기
+
+GIF는 실제 시뮬레이터 로직(A*, RobotStepper)으로 뽑은 트레이스를 그린 것이다. 시나리오는 [tools/TraceExport/Scenario.cs](tools/TraceExport/Scenario.cs)에 있다.
+
+```bash
+dotnet run --project tools/TraceExport -- --map maps/factory-a.json --out artifacts/trace/factory-a.json
+pip install -r tools/render/requirements.txt
+python tools/render/render_gif.py artifacts/trace/factory-a.json docs/images/fleet-3d.gif --view iso
+python tools/render/render_gif.py artifacts/trace/factory-a.json docs/images/fleet-2d.gif --view 2d
+```
+
+TraceExport는 같은 틱에 두 로봇이 같은 칸을 점유하면 exit 4로 끝난다.
+
+---
+
+## 구조
+
+```
+robot-fleet/
+├── src/
+│   ├── Shared/            좌표, 맵 로더·검증, 도메인 모델
+│   ├── FleetController/   A* 경로 계획, 이동 승인
+│   └── Simulator/         틱 루프, 로봇 이동, 콘솔 출력
+├── tests/                 xUnit 테스트 (Shared / FleetController / Simulator)
+├── tools/                 트레이스 내보내기, GIF 렌더러
+├── maps/
+│   ├── factory-a.json     60×40 공장 맵
+│   └── test-corridor.json 9×7 테스트 맵 (1칸 통로)
+└── docs/                  설계 문서
+```
+
+이후 단계에서 `IngestApi`, `EventWorker`, `QueryApi`, `deploy/`, `loadtest/`가 추가된다.
+
+---
+
+## 설계 요약
+
+```
+Simulator ──(틱마다 배치 이동 요청)──► FleetController ◄──► Redis   셀 락, 로봇 상태, 대기 그래프
+    │
+    └──(이벤트 배치)──► IngestApi ──► RabbitMQ ──► EventWorker ──► PostgreSQL
+                                                                     ▲
+                                                         QueryApi ───┘ ──► 관제 화면 / Grafana
+```
+
+- **이동 승인은 동기, 이벤트 적재는 비동기.** 로봇이 움직여도 되는지는 즉답이 필요하고, DB 적재가 느려져도 로봇은 멈추면 안 된다.
+- **배치 이동 판단.** 로봇 200대가 각각 HTTP를 보내면 100ms 틱을 맞출 수 없어서 틱당 한 번에 묶어 판정한다.
+- **분산 락 + 교착 해소.** 현재 칸과 다음 칸을 함께 잠가 자리 맞바꿈 충돌을 막고, 대기 그래프에서 순환을 찾아 한 대를 비켜 세운다.
+- **순서 보장.** `robotId` 기준 consistent hash로 파티션을 나누고 파티션마다 consumer를 하나만 둔다.
+- **멱등.** 이벤트 ID를 `{batchId}/{index}`로 고정해서 재전송해도 같은 값이 되게 하고, Ingest와 Worker 양쪽에서 거른다.
+- **시간 분해.** 로봇의 시간을 이동, 작업, 대기, 유휴로 나눈다. 대기(길이 막힘)와 유휴(할 일 없음)를 구분해야 병목이 로봇 수인지 통로인지 알 수 있다.
+
+자세한 내용은 문서 참고.
+
+| 문서 | 내용 |
 |---|---|
-| 데이터 공급 | 시뮬레이터가 곧 데이터 소스. 외부 의존 없이 무한 생성 |
-| 부하 시험 | 로봇 수와 갱신 주기만 올리면 초당 수백 ~ 수만 건 |
-| 알고리즘 깊이 | 경로 탐색, 다중 에이전트 충돌 회피, 교착 탐지 |
-| 분산 시스템 | 순서 보장, 멱등, 분산 락, 수평 확장 |
-| 결과 제시 | "로봇 몇 대가 최적인가"를 **실험 결과 그래프**로 증명 |
-
-실제 AMR 도입 현장에서도 시뮬레이션으로 사전 검증한다. 합성 데이터라는 점이 약점이 되지 않는 소재.
-
----
-
-## 핵심 기술 과제
-
-1. **충돌 회피** — 같은 칸 진입, 자리 맞바꿈, 추종 충돌을 모두 처리
-2. **교착 해소** — 순환 대기를 탐지하고 양보 로직으로 푼다
-3. **이벤트 순서 보장** — 같은 로봇의 이벤트는 반드시 순서대로 처리
-4. **멱등 처리** — 재전송된 이벤트가 지표를 두 번 더하지 않게
-5. **수평 확장** — 관제·수집·처리를 각각 독립적으로 늘릴 수 있게
-6. **효율 측정** — 손실 시간을 분해해 병목을 숫자로 지목
+| [01-architecture](docs/01-architecture.md) | 서비스 분리, 데이터 흐름, 큐·Redis·DB 설계 |
+| [02-infrastructure](docs/02-infrastructure.md) | k3s 구성, 리소스 배분, 모니터링, 장애 주입 |
+| [03-map-and-events](docs/03-map-and-events.md) | 맵 포맷, 도메인 모델, 이벤트 스키마, 상태 전이 |
+| [04-algorithm](docs/04-algorithm.md) | A*, 충돌 유형, 락 전략, 교착 탐지·해소 |
+| [05-metrics](docs/05-metrics.md) | 지표 정의, 실험 설계 |
+| [06-m1-design](docs/06-m1-design.md) | M1 상세 설계와 테스트 목록 |
 
 ---
 
 ## 기술 스택
 
-| 구분 | 선택 |
+| 구분 | 사용 |
 |---|---|
-| 언어 / 런타임 | C# / .NET 8 |
-| API | ASP.NET Core (Minimal API) |
-| 백그라운드 | .NET Worker Service |
-| 메시지 브로커 | RabbitMQ (MassTransit) |
-| 캐시 / 분산 락 | Redis (StackExchange.Redis) |
-| 데이터베이스 | PostgreSQL |
-| 오브젝트 스토리지 | MinIO *(선택 — 맵 스냅샷·리플레이 저장용)* |
-| 컨테이너 오케스트레이션 | k3s |
-| 인그레스 | nginx ingress controller |
-| 모니터링 | Prometheus + Grafana (`prometheus-net`) |
-| 부하 테스트 | 시뮬레이터 자체 + k6 (API 부하용) |
+| 언어 | C# / .NET 8 |
+| API · 백그라운드 | ASP.NET Core Minimal API, Worker Service |
+| 메시징 | RabbitMQ (MassTransit) |
+| 상태 · 락 | Redis |
+| 저장소 | PostgreSQL |
+| 배포 | k3s, nginx ingress |
+| 모니터링 | Prometheus, Grafana |
+| 부하 테스트 | 시뮬레이터, k6 |
 
----
+## 배포 환경 (예정)
 
-## 문서
+자체 서버에 k3s 3노드로 구성한다. 아래 주소는 예시다.
 
-| 문서 | 내용 |
-|---|---|
-| [01-architecture.md](docs/01-architecture.md) | 서비스 분리, 데이터 흐름, 큐·Redis·DB 설계 |
-| [02-infrastructure.md](docs/02-infrastructure.md) | k3s 구성, 배포, 리소스 배분, 모니터링 |
-| [03-map-and-events.md](docs/03-map-and-events.md) | 맵 구조, 도메인 모델, 이벤트 스키마 |
-| [04-algorithm.md](docs/04-algorithm.md) | 경로 탐색, 충돌 회피, 교착 처리 |
-| [05-metrics.md](docs/05-metrics.md) | 지표 정의, 실험 설계 |
-| [06-m1-design.md](docs/06-m1-design.md) | M1 상세 설계 — 프로젝트 구조, 타입 시그니처, A* 규약, 틱 루프, 샘플 맵, 테스트 목록, 작업 분할 |
-
----
-
-## 로드맵
-
-| 단계 | 범위 | 완료 기준 |
+| 노드 | 주소 | 역할 |
 |---|---|---|
-| **M1** | 맵 + 로봇 1대 + A* 경로 탐색 (단일 프로세스) | 콘솔에서 로봇이 목적지까지 이동 |
-| **M2** | 다중 로봇 + 충돌 회피 + 교착 처리 | 로봇 20대가 막히지 않고 계속 작업 수행 |
-| **M3** | 이벤트 외부 발행 — Ingest API + RabbitMQ + Worker 분리 | 이벤트가 DB에 적재되고 유실 0 |
-| **M4** | Redis 이전 (락·상태·멱등), 관제 다중 pod | 관제 pod 2개가 동시에 떠도 충돌 없음 |
-| **M5** | k3s 배포 + nginx + 스케일 아웃 | pod 수 조절로 처리량 변화 확인 |
-| **M6** | Prometheus + Grafana + 실시간 관제 화면 | 맵 위 로봇 움직임과 지표 동시 확인 |
-| **M7** | 실험 — 로봇 수별 처리량, 알고리즘 비교, 혼잡 히트맵 | 그래프 산출 |
-| **M8** | 장애 주입 — pod kill, 브로커 다운, 지연 | 복구 동작 검증 |
+| node-1 | 192.168.10.11 | control plane, PostgreSQL, RabbitMQ |
+| node-2 | 192.168.10.12 | 애플리케이션 |
+| node-3 | 192.168.10.13 | 애플리케이션, 모니터링 |
 
-M2까지만 완료해도 포트폴리오 항목 하나가 성립한다.
-
----
-
-## 진행 상태
-
-- [x] M1 맵 + 단일 로봇 경로 탐색
-- [ ] M2 다중 로봇 충돌 회피
-- [ ] M3 이벤트 파이프라인 분리
-- [ ] M4 Redis 상태 이전
-- [ ] M5 k3s 배포
-- [ ] M6 모니터링 · 관제 화면
-- [ ] M7 실험 및 분석
-- [ ] M8 장애 주입 검증
-
----
-
-## 디렉터리 구조 (예정)
-
-```
-robot-fleet/
-├── README.md
-├── RobotFleet.sln
-├── Directory.Build.props    # net8.0, Nullable, TreatWarningsAsErrors
-├── docs/
-├── src/
-│   ├── Shared/              # 공통 모델 (좌표, 맵, 도메인), 이벤트 계약      — M1
-│   ├── FleetController/     # 경로 계획, 이동 승인 (라이브러리)              — M1
-│   ├── FleetController.Api/ # 위 라이브러리를 감싼 HTTP API                  — M3
-│   ├── Simulator/           # 가상 공장 + 로봇 시뮬레이터 (콘솔)             — M1
-│   ├── IngestApi/           # 이벤트 수신                                   — M3
-│   ├── EventWorker/         # 이벤트 소비 · 적재 · 집계                     — M3
-│   └── QueryApi/            # 조회 · 관제 화면 백엔드                       — M6
-├── tests/
-│   ├── Shared.Tests/
-│   ├── FleetController.Tests/
-│   └── Simulator.Tests/
-├── deploy/
-│   ├── k3s/                 # 매니페스트
-│   └── monitoring/          # Prometheus, Grafana
-├── loadtest/                # k6 시나리오
-└── maps/
-    ├── factory-a.json       # 60×40 기본 맵
-    └── test-corridor.json   # 9×7 테스트 맵 (1칸 통로)
-```
+접속 정보, 인증서, kubeconfig, `.env` 같은 설정 파일은 저장소에 올리지 않는다(`.gitignore` 참고).
