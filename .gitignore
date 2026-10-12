@@ -72,3 +72,6 @@ data/
 *.db
 *.rdb
 *.aof
+
+# Local tools (GIF 생성)
+tools/

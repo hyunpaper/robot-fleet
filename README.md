@@ -53,7 +53,6 @@ robot-fleet/
 │   ├── FleetController/   A* 경로 계획, 이동 승인
 │   └── Simulator/         틱 루프, 로봇 이동, 콘솔 출력
 ├── tests/                 xUnit 테스트 (Shared / FleetController / Simulator)
-├── tools/                 트레이스 내보내기, GIF 렌더러
 ├── maps/
 │   ├── factory-a.json     60×40 공장 맵
 │   └── test-corridor.json 9×7 테스트 맵 (1칸 통로)
