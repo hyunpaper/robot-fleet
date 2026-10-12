@@ -36,6 +36,7 @@ public sealed record TopologySpec(IReadOnlyList<ExchangeSpec> Exchanges, IReadOn
 
         exchanges.Add(new ExchangeSpec(DlxName(prefix), "fanout", true));
         queues.Add(new QueueSpec(DlqName(prefix), null, null, QuorumOnly()));
+        bindings.Add(new BindingSpec(DlxName(prefix), DlqName(prefix), ""));   // fanout: 라우팅 키 무시
         queues.Add(new QueueSpec(InvalidQueueName(prefix), null, null, QuorumOnly()));
 
         return new TopologySpec(exchanges, queues, bindings);

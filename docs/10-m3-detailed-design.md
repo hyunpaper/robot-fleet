@@ -153,7 +153,7 @@
 | 항목 | 결정 | 근거 |
 |---|---|---|
 | 주체 | IngestApi · EventWorker **둘 다** 기동 시 · 재연결 시 | 어느 쪽이 먼저 떠도 된다. 선언은 같은 인자면 멱등 |
-| 순서 | exchange 4(`fleet.telemetry` · `fleet.task` · `fleet.conflict` · `fleet.dlx`) → 큐 50(파티션 48 + `fleet.dlq` + `fleet.invalid`) → 바인딩 48(가중치 `"1"`) | 바인딩 전에 양끝이 있어야 한다 |
+| 순서 | exchange 4(`fleet.telemetry` · `fleet.task` · `fleet.conflict` · `fleet.dlx`) → 큐 50(파티션 48 + `fleet.dlq` + `fleet.invalid`) → 바인딩 49(파티션 48은 가중치 `"1"`, `fleet.dlx` → `fleet.dlq` 1개) | 바인딩 전에 양끝이 있어야 한다 |
 | 인자 | 08 §8 표 그대로. M3는 단일 노드라 `x-quorum-initial-group-size` 생략(=1) | 08 |
 | `PRECONDITION_FAILED`(기존 큐와 인자 다름) | **기동 실패**, 로그에 큐 이름 · 차이 | 자동 삭제는 메시지를 지운다. 사람이 판단한다 |
 | consistent-hash 플러그인 없음(`COMMAND_INVALID`/unknown exchange type) | 기동 실패, "rabbitmq_consistent_hash_exchange 활성화 필요" | 원격 서버 준비 확인(09 사용자 확인) |
@@ -852,7 +852,7 @@ public static class StatusTransitions
 | M-01: 03의 배치 봉투 예시 JSON(`tickMs` 포함) → 역직렬화 → 직렬화가 공백 제외 같은 바이트, 속성 순서 = 선언 순서 |
 | M-02: 9종 각각 라우팅 키 기대값 표(테스트에 표로) |
 | M-03: `EventEnvelope.From(batch, 17).EventId == $"{batchId}/17"`, `TickMs` 복사 |
-| M-04: `Build("")` → exchange 4 · 큐 50 · 바인딩 48, 위 인자 표와 일치, `Build("t1.")` → 모든 이름 접두사 |
+| M-04: `Build("")` → exchange 4 · 큐 50 · 바인딩 49(DLX → DLQ 포함), 위 인자 표와 일치, `Build("t1.")` → 모든 이름 접두사 |
 | 전이: 03 표의 허용 칸 전부 `true`, 금지 예시 5개 `false` |
 
 ### [단순 S2] DB

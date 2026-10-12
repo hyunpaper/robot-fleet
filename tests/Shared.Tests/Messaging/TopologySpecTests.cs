@@ -13,12 +13,13 @@ public class TopologySpecTests
 
         spec.Exchanges.Should().HaveCount(4);
         spec.Queues.Should().HaveCount(50);
-        spec.Bindings.Should().HaveCount(48);
+        spec.Bindings.Should().HaveCount(49);   // 파티션 48 + fleet.dlx → fleet.dlq
         spec.Exchanges.Select(e => e.Name).Should().BeEquivalentTo(
             ["fleet.telemetry", "fleet.task", "fleet.conflict", "fleet.dlx"]);
         spec.Exchanges.Single(e => e.Name == "fleet.dlx").Type.Should().Be("fanout");
         spec.Exchanges.Where(e => e.Name != "fleet.dlx").Should().OnlyContain(e => e.Type == "x-consistent-hash");
-        spec.Bindings.Should().OnlyContain(b => b.RoutingKey == "1");
+        spec.Bindings.Where(b => b.Exchange != "fleet.dlx").Should().OnlyContain(b => b.RoutingKey == "1");
+        spec.Bindings.Should().Contain(new BindingSpec("fleet.dlx", "fleet.dlq", ""));
     }
 
     [Theory] // M-04
@@ -88,7 +89,7 @@ public class TopologySpecTests
         spec.Bindings.Should().Contain(new BindingSpec("fleet.telemetry", "fleet.telemetry.p15", "1"));
         spec.Bindings.Where(b => b.Exchange == "fleet.conflict")
             .Should().OnlyContain(b => b.Queue.StartsWith("fleet.conflict.p"));
-        spec.Bindings.GroupBy(b => b.Exchange).Should().OnlyContain(g => g.Count() == 16);
+        spec.Bindings.Where(b => b.Exchange != "fleet.dlx").GroupBy(b => b.Exchange).Should().OnlyContain(g => g.Count() == 16);
     }
 
     [Fact] // M-04
