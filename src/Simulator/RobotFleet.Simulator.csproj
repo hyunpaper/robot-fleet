@@ -3,6 +3,12 @@
     <OutputType>Exe</OutputType>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="RobotFleet.Simulator.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="prometheus-net" Version="8.2.1" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="../FleetController/RobotFleet.FleetController.csproj" />
   </ItemGroup>
 </Project>

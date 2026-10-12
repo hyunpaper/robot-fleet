@@ -637,7 +637,7 @@ WHERE s.category = 'telemetry'
 |---|---|---|
 | 1차 (병렬) | S1 · S2 · S4 | 없음. S2 · S4는 S1의 **시그니처(아래 코드 블록)** 에 맞춰 쓴다 — S1 산출물이 없어도 같은 이름 · 같은 형태로 컴파일되게 |
 | 병합 | 중간 관리자 | 1차 셋을 합치고 `RobotFleet.sln`에 프로젝트 추가, 전체 빌드 |
-| 2차 | S3 · [핵심] | 병합 완료 |
+| 2차 | S3 · [핵심] (병렬) | 병합 완료 + [핵심] 껍데기 커밋. S3는 껍데기 시그니처만 보고 컴파일한다 |
 
 1차 공통 규칙:
 
@@ -950,16 +950,160 @@ public sealed class PartitionMaintainer(NpgsqlDataSource dataSource, TimeProvide
 
 ### [단순 S3] 호스트 조립 (2차)
 
-`src/IngestApi/Program.cs` · `Endpoints/**` · `Health/**`, `src/EventWorker/Program.cs` · `Health/**`, `src/PipelineHost/**`,
-`src/Simulator/SimulationOptions.cs` · `Program.cs`, 새 csproj, `RobotFleet.sln`.
+[핵심]의 업무 로직은 호스트 없는 라이브러리 프로젝트에 있다(아래 "S3가 쓰는 [핵심] 타입"). 그 타입들은 **시그니처가 확정된 껍데기로 이미 커밋돼 있어** S3 혼자 컴파일된다. S3는 등록 · 호출 · HTTP 배선만 하고, 본문 구현(`NotImplementedException`)은 [핵심]이 병렬로 채운다.
 
-- [ ] 프로젝트 생성: `IngestApi` · `EventWorker` · `PipelineHost` · `Infrastructure.RabbitMq` · `Infrastructure.Redis`, 테스트 `IngestApi.Tests` · `EventWorker.Tests`. 참조 관계 · 패키지(표)
-- [ ] `AddFleetIngest` · `AddFleetWorker` · `AddFleetSimulatorEvents` 조립(설정 → 구현 선택, §9 표)
-- [ ] 호스트마다 §9 "접속 정보" 순서로 구성: `appsettings.json`(세 키 빈 문자열, 커밋) + `appsettings.Local.json` optional 로드 후 환경 변수 · 명령행 재추가, `appsettings.Local.json`은 있을 때만 출력 복사
-- [ ] 엔드포인트 배선, `/metrics` · `/health/*`(§11 readiness), 워커 관리 포트
-- [ ] Simulator 명령행 옵션(§9) · 사용법 문자열 · `SimulationOptionsTests` 추가 행
+**만들 파일** (이 밖의 파일은 고치지 않는다. 특히 `src/Ingest.Core` · `src/EventWorker.Core` · `src/Infrastructure.*` · `src/Simulator/Fleet` · `src/Simulator/Events` · `src/PipelineHost`)
 
-(2차 착수 시 S1 산출물 기준으로 시그니처 수준 명세를 다시 준다.)
+| 파일 | 내용 |
+|---|---|
+| `src/Hosting/RobotFleet.Hosting.csproj` | 클래스 라이브러리. `Microsoft.Extensions.Configuration.Json` 8.0.1 · `…Configuration.EnvironmentVariables` 8.0.0 · `…Configuration.CommandLine` 8.0.0 · `…Hosting.Abstractions` 8.0.1, 참조: Ingest.Core · EventWorker.Core · Infrastructure.RabbitMq · Infrastructure.Redis · Infrastructure.Postgres |
+| `src/Hosting/FleetConfiguration.cs` | §9 "접속 정보" 순서 적용 |
+| `src/Hosting/FleetHostingExtensions.cs` | `AddFleetIngest` · `AddFleetWorker` |
+| `src/Hosting/PartitionMaintenanceService.cs` | 매시 파티션 유지 + `fleet_telemetry_default_rows` 게이지 |
+| `src/Hosting/HealthEndpoints.cs` | `/health/live` · `/health/ready` 매핑 |
+| `src/IngestApi/RobotFleet.IngestApi.csproj` | `Microsoft.NET.Sdk.Web`. `prometheus-net.AspNetCore` 8.2.1, 참조: Hosting |
+| `src/IngestApi/Program.cs`, `src/IngestApi/Endpoints/IngestEndpoints.cs` | 아래 |
+| `src/IngestApi/appsettings.json` | 아래 JSON |
+| `src/EventWorker/RobotFleet.EventWorker.csproj` | `Microsoft.NET.Sdk.Web`(관리 포트용). `prometheus-net.AspNetCore` 8.2.1, 참조: Hosting |
+| `src/EventWorker/Program.cs`, `src/EventWorker/appsettings.json` | 아래 |
+| `src/Simulator/SimulationOptions.cs`, `src/Simulator/Program.cs` | 옵션 추가 · fleet 모드 분기 (기존 M1 동작 유지) |
+| `tests/Simulator.Tests/SimulationOptionsTests.cs` | 새 옵션 행 추가(기존 행 유지) |
+| `tests/Hosts.Tests/RobotFleet.Hosts.Tests.csproj`, `ConfigurationTests.cs`, `CompositionTests.cs`, `HealthTests.cs` | H-01~H-05 |
+| `RobotFleet.sln` | 위 새 프로젝트 4개(Hosting · IngestApi · EventWorker · Hosts.Tests) 추가 |
+
+**S3가 쓰는 [핵심] 타입** (껍데기 커밋됨 — 고치지 말 것)
+
+```csharp
+// src/Shared/Pipeline
+public interface IStartupStep { string Name { get; } Task RunAsync(CancellationToken ct); }
+public sealed class ReadinessState { void Require(string c); void Set(string c, bool ready); bool IsReady { get; }
+                                     IReadOnlyDictionary<string, bool> Snapshot(); }
+public static class ReadinessComponents { RabbitTopology, PostgresMigrations, WorkerConsuming }
+
+// src/Ingest.Core  (namespace RobotFleet.Ingest)
+public sealed record IngestResponseBody(string? BatchId, int Accepted, int TelemetryDropped, bool Duplicate, string? Error);
+public sealed record IngestResponse(int StatusCode, IngestResponseBody Body, int? RetryAfterSeconds) { IngestResult ToResult(); }
+public sealed class IngestService { Task<IngestResponse> HandleAsync(ReadOnlyMemory<byte> body, CancellationToken ct); }
+public static IServiceCollection AddIngestCore(this IServiceCollection services);           // IngestService · IngestStartupService · ReadinessState
+
+// src/EventWorker.Core  (namespace RobotFleet.EventWorker)
+public sealed class WorkerOptions { string WorkerId; string TopologyPrefix; ushort Prefetch; int BatchMax; TimeSpan BatchWindow; … }
+public static IServiceCollection AddWorkerCore(this IServiceCollection services, Action<WorkerOptions>? configure = null);
+
+// src/Infrastructure.RabbitMq · Redis · Postgres
+public static IServiceCollection AddFleetRabbitMq(this IServiceCollection s, Action<RabbitMqOptions> c);  // ConnectionString 비면 예외. IStartupStep(토폴로지) 등록
+public static IServiceCollection AddFleetRedis(this IServiceCollection s, Action<RedisOptions> c);        // 비면 Bypass · 미구성 명부
+public static IServiceCollection AddFleetPostgres(this IServiceCollection s, Action<PostgresOptions> c);  // 비면 예외. IStartupStep(마이그레이션 · 파티션) 등록
+// RabbitMqOptions { ConnectionString, TopologyPrefix }, RedisOptions { ConnectionString, KeyPrefix }, PostgresOptions { ConnectionString }
+// PartitionMaintainer { Task EnsureAsync(ct); Task<long> CountDefaultRowsAsync(ct); }
+
+// src/Simulator
+public sealed record FleetOptions { int Robots; double Lambda; int Seed; int WorkMs; int TickMs; double SpeedFactor;
+                                    int MoveMsPerCell; int TurnMsPer90; long MaxTicks; }
+public sealed record FleetRunResult(long Ticks, int TasksCreated, int TasksCompleted, int TasksFailed, long Overruns,
+                                    TimeSpan StallTime, int ExitCode);
+public sealed class FleetSimulation(GridMap map, FleetOptions options, IEventSink? sink, ITickDelay delay, ConsoleRenderer? renderer)
+{ Task<FleetRunResult> RunAsync(CancellationToken ct); }
+public sealed record EventSenderOptions { int Capacity; TimeSpan AttemptTimeout; …; string? FailureDumpDirectory; }
+public sealed class EventBatchSender(IIngestClient client, SendLog? log, EventSenderOptions options, TimeProvider time) : IEventSink
+{ bool Faulted; string? FaultReason; Task RunAsync(CancellationToken ct); Task<int> DrainAsync(CancellationToken ct); }
+public sealed class SendLog(string directory, string mapId, string runId) : IDisposable { string Path; }
+public sealed class HttpIngestClient(HttpClient http) : IIngestClient;   // http.BaseAddress = Ingest 주소
+```
+
+**S3 공개 시그니처**
+
+```csharp
+namespace RobotFleet.Hosting;
+
+public static class FleetConfiguration
+{
+    /// 기존 소스 뒤에 appsettings.Local.json(optional, basePath 기준)을 붙이고,
+    /// 그 뒤에 환경 변수 · 명령행을 다시 붙인다 → 순서: json < {Env}.json < Local.json < 환경 변수 < 명령행 (10 §9)
+    public static IConfigurationBuilder AddFleetSources(this IConfigurationBuilder builder, string basePath, string[] args);
+
+    /// 빈 문자열 · 공백 = null
+    public static string? GetConnection(this IConfiguration config, string name);   // "RabbitMq" | "Redis" | "Postgres"
+}
+
+public static class FleetHostingExtensions
+{
+    /// AddFleetRabbitMq(ConnectionStrings:RabbitMq, Fleet:Topology:Prefix) → AddFleetRedis(ConnectionStrings:Redis,
+    /// Fleet:Redis:KeyPrefix) → AddIngestCore()
+    public static IServiceCollection AddFleetIngest(this IServiceCollection services, IConfiguration config);
+
+    /// 등록 순서가 기동 순서다: AddFleetPostgres → AddFleetRabbitMq → AddFleetRedis →
+    /// AddWorkerCore(WorkerId = Fleet:Worker:Id, TopologyPrefix = Fleet:Topology:Prefix) → PartitionMaintenanceService
+    public static IServiceCollection AddFleetWorker(this IServiceCollection services, IConfiguration config);
+}
+
+/// postgres.migrations가 Ready가 된 뒤 시작, 매시 정각 EnsureAsync + CountDefaultRowsAsync → 게이지 fleet_telemetry_default_rows.
+/// 실패는 로그만(다음 정각 재시도). TimeProvider 주입
+public sealed class PartitionMaintenanceService : BackgroundService { … }
+
+public static class HealthEndpoints
+{
+    /// /health/live → 200 "live". /health/ready → ReadinessState.IsReady ? 200 : 503, 본문 = Snapshot() JSON
+    public static IEndpointRouteBuilder MapFleetHealth(this IEndpointRouteBuilder app);
+    internal static (int StatusCode, IReadOnlyDictionary<string, bool> Body) Ready(ReadinessState state);   // 테스트용
+}
+```
+
+`RobotFleet.Hosting.csproj`는 `Microsoft.AspNetCore.App` 프레임워크 참조(`<FrameworkReference Include="Microsoft.AspNetCore.App" />`)로 `IEndpointRouteBuilder`를 쓴다.
+
+**Program 구성**
+
+| 호스트 | 구성 |
+|---|---|
+| IngestApi | `WebApplication.CreateBuilder(args)` → `builder.Configuration.AddFleetSources(builder.Environment.ContentRootPath, args)` → `AddFleetIngest` → `app.MapPost("/api/v1/events/batch", IngestEndpoints.HandleAsync)` · `MapFleetHealth()` · `MapMetrics()`. 요청 본문 상한 8MB(Kestrel `MaxRequestBodySize`) |
+| `IngestEndpoints.HandleAsync(HttpContext ctx, IngestService svc)` | 본문을 바이트로 읽어 `svc.HandleAsync` → `RetryAfterSeconds`가 있으면 `Retry-After` 헤더 → `Results.Json(resp.Body, statusCode: resp.StatusCode)` (camelCase). 본문 읽기 실패 → 400 |
+| EventWorker | `WebApplication.CreateBuilder(args)` → `AddFleetSources` → `AddFleetWorker` → Kestrel은 `Fleet:Management:Port`(기본 8081)만 listen → `MapFleetHealth()` · `MapMetrics()`. 업무 엔드포인트 없음(10 D5) |
+| Simulator (`--robots N`이 있을 때 fleet 모드) | 맵 로드 → `--ingest`가 있으면 `HttpClient{BaseAddress}` → `HttpIngestClient` → (`--sendlog`면 `SendLog(dir, mapId, runId)`, runId = `yyyyMMddHHmmss` UTC) → `EventBatchSender` → 송신 루프를 `Task.Run(sender.RunAsync)` → `FleetSimulation(map, opts, sink: sender, …).RunAsync` → 끝나면 `sender.DrainAsync` → `unsent` 출력. `--ingest`가 없으면 `sink: null`. `--metrics-port`면 `Prometheus.MetricServer(port).Start()`. 종료 코드 = `FleetRunResult.ExitCode`, 단 `unsent > 0`이면 5. `--robots`가 없으면 기존 M1 경로 그대로 |
+| Ctrl+C | 기존 M1과 같이 취소 토큰 → 정상 종료 경로(Drain 포함) |
+
+`appsettings.json` (IngestApi · EventWorker 공통 골격, 값은 비움):
+
+```json
+{
+  "ConnectionStrings": { "RabbitMq": "", "Redis": "", "Postgres": "" },
+  "Fleet": { "Topology": { "Prefix": "" }, "Redis": { "KeyPrefix": "" }, "Worker": { "Id": "" }, "Management": { "Port": 8081 } },
+  "Logging": { "LogLevel": { "Default": "Information" } }
+}
+```
+
+두 host csproj에 `<Content Include="appsettings.Local.json" Condition="Exists('appsettings.Local.json')" CopyToOutputDirectory="PreserveNewest" />`. `appsettings.Local.json` 자체는 만들지 않는다.
+
+**Simulator 옵션 추가** (`SimulationOptions`에 속성 추가, 사용법 문자열 갱신)
+
+| 옵션 | 속성 | 기본 | 검증 |
+|---|---|---|---|
+| `--robots N` | `int? Robots` | null(=M1 모드) | ≥ 1 |
+| `--lambda x` | `double Lambda` | 0.5 | ≥ 0 |
+| `--seed n` | `int Seed` | 1 | 정수 |
+| `--ingest url` | `Uri? IngestUrl` | null | 절대 http/https URI |
+| `--sendlog dir` | `string? SendLogDirectory` | null | |
+| `--metrics-port p` | `int? MetricsPort` | null | 1~65535 |
+
+fleet 모드에서 `--start` · `--goal` · `--heading`은 무시(파싱은 기존대로). `FleetOptions`는 `Robots · Lambda · Seed · TickMs · SpeedFactor · MaxTicks`를 옮겨 만든다.
+
+**테스트**
+
+| ID | 내용 |
+|---|---|
+| H-01 | `AddFleetSources` — 임시 폴더의 `appsettings.json`(빈 값) < `appsettings.Local.json` < 환경 변수(`ConnectionStrings__Postgres`) 우선순위, Local 파일 없으면 오류 없음, `GetConnection` 빈 문자열 → null |
+| H-02 | `AddFleetIngest` — RabbitMq 비면 `InvalidOperationException`, Redis 비면 `IIdemStore`가 `BypassIdemStore` |
+| H-03 | `AddFleetWorker` — `IEnumerable<IStartupStep>` 순서가 `postgres.migrations` → `rabbitmq.topology` (자리표시 연결 문자열 `Host=localhost;Database=x` · `amqp://localhost`로 컨테이너만 만들고 연결하지 않는다) |
+| H-04 | `HealthEndpoints.Ready` — 요구 구성 요소 하나라도 false면 503 + 스냅숏, 전부 true면 200 |
+| H-05 | `SimulationOptionsTests` — 새 옵션 6개 정상 · 오류 행, `--robots` 없으면 `Robots == null` |
+
+**완료 조건**
+
+| 조건 |
+|---|
+| `dotnet build RobotFleet.sln` 경고 0 (껍데기 상태에서) |
+| `dotnet test` — 기존 + H-01~H-05 통과. [핵심] 껍데기를 실행하는 테스트는 만들지 않는다 |
+| `dotnet format --verify-no-changes` 통과 |
+| 저장소에 접속 정보 값 없음, `appsettings.Local.json` 미생성 |
 
 ### [단순 S4] 테스트 장치 · 단순 fake · Reconcile 껍데기
 
@@ -1110,16 +1254,34 @@ public sealed class ReconcileRunner(IReconcileQueries queries, TextWriter output
 
 ### [핵심] 중간 관리자
 
-- [ ] `src/Simulator/Fleet/{FleetSimulation,TaskGenerator,TaskDispatcher,TaskLifecycle}.cs` + G-01~G-06
-- [ ] `src/Simulator/Events/{EventCollector,EventBatchSender,SendLog,HttpIngestClient,InProcessIngestClient}.cs` + E-01~E-04 · S-01~S-07, `RobotStepper` 관찰 지점
-- [ ] `src/IngestApi/Core/IngestService.cs`, `src/Infrastructure.Redis/{RedisIdemStore,Scripts/idem_begin.lua,idem_abort.lua}` + I-01~I-16
-- [ ] `src/Infrastructure.RabbitMq/{TopologyDeclarer,RabbitEventPublisher,RabbitPartitionSubscriber}.cs` (확인 추적 · 채널 풀)
-- [ ] `src/Infrastructure.InMemory/InMemoryBroker.cs`, `InMemoryEventStore.cs` (의미론 충실 fake)
-- [ ] `src/EventWorker/Core/{PartitionProcessor,EventHandlers,AssignmentCoordinator}.cs`, `src/Infrastructure.Redis/RedisPartitionRoster.cs` + W-01~W-12 · R-01~R-07
-- [ ] `src/Infrastructure.Postgres/PgEventStore.cs` (unnest · RETURNING 집계 SQL) + D-04
-- [ ] 계약 기반 클래스 `tests/*/Contracts/*Contract.cs` + C-01~C-04 · T-01~T-03
-- [ ] `src/Reconcile/ReconcileQueries.cs` (차집합 SQL)
-- [ ] 1차 병합 · sln 갱신, P-01 · P-02, L3 X-01~X-04 실행 · 보고서
+업무 로직은 호스트 없는 라이브러리에 둔다(S3와 파일이 겹치지 않게). 껍데기는 S3 착수 전에 커밋했다.
+
+| 프로젝트 | 파일 |
+|---|---|
+| `src/Simulator` | `Fleet/{FleetOptions,FleetSimulation,TaskGenerator,TaskDispatcher,TaskLifecycle}.cs`, `Events/{EventCollector,EventBatchSender,EventSenderOptions,SendLog,HttpIngestClient,DelegateIngestClient}.cs`, `RobotStepper` 관찰 지점 |
+| `src/Ingest.Core` | `IngestService` · `IngestResponse` · `IngestStartupService` · 메트릭 · 등록 확장 |
+| `src/EventWorker.Core` | `WorkerService` · `AssignmentCoordinator` · `PartitionProcessor` · `EventHandlers` · 메트릭 · 등록 확장 |
+| `src/Infrastructure.RabbitMq` | `RabbitConnectionProvider` · `TopologyDeclarer` · `RabbitEventPublisher` · `RabbitPartitionSubscriber` · 등록 확장 |
+| `src/Infrastructure.Redis` | `RedisConnectionProvider` · `RedisIdemStore`(+ Lua) · `RedisPartitionRoster` · `BypassIdemStore` · 등록 확장 |
+| `src/Infrastructure.Postgres` | `PgEventStore` · `PostgresStartupStep` · `PostgresOptions` · 등록 확장 |
+| `src/Infrastructure.InMemory` | `InMemoryBroker` · `InMemoryEventStore` |
+| `src/PipelineHost` | in-process 조립 전부(§9). S3에서 옮김 — 조립 대상이 전부 [핵심] 타입이다 |
+| `src/Reconcile` | `ReconcileQueries.cs` |
+| `src/Shared` | `Pipeline/{IStartupStep,ReadinessState}.cs`, `TopologySpec`의 DLX → DLQ 바인딩(49개) |
+| `tests/Pipeline.Tests` (신규) | L1: I · W · R · P 시리즈, 계약 기반 클래스와 InMemory 쪽 |
+| `tests/Infrastructure.Tests` | L2: C · T · D-04 (Redis · RabbitMQ · Postgres 쪽) |
+| `tests/Simulator.Tests` | G · E · S 시리즈 |
+
+- [ ] 생애주기 · 생성기 · 할당기 + G-01~G-06
+- [ ] 수집기 · 송신기 · 송신 로그 + E-01~E-04 · S-01~S-07
+- [ ] Ingest + Redis 멱등 Lua + I-01~I-16
+- [ ] RabbitMQ 선언 · 확인 추적 · 구독
+- [ ] InMemoryBroker · InMemoryEventStore (의미론 충실 fake)
+- [ ] 워커 처리기 · 핸들러 · 배정 · Redis 명부 + W-01~W-12 · R-01~R-07
+- [ ] PgEventStore + D-04
+- [ ] 계약 + C-01~C-04 · T-01~T-03
+- [ ] Reconcile 차집합 SQL
+- [ ] PipelineHost + P-01 · P-02, S3 병합 후 통합 확인, L3 X-01~X-04 보고서
 
 ---
 

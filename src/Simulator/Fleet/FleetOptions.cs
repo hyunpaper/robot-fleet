@@ -1,0 +1,30 @@
+namespace RobotFleet.Simulator.Fleet;
+
+/// 다대 로봇 시뮬레이션 설정. 10 §1 · §9
+public sealed record FleetOptions
+{
+    public int Robots { get; init; } = 20;
+
+    /// 작업 발생률(건/초, 시뮬레이션 시간)
+    public double Lambda { get; init; } = 0.5;
+
+    public int Seed { get; init; } = 1;
+
+    /// 적재 · 하역 체류(ms)
+    public int WorkMs { get; init; } = 2000;
+
+    public int TickMs { get; init; } = 100;
+
+    /// 실시간 대기 = TickMs / SpeedFactor. 0이면 대기 없음
+    public double SpeedFactor { get; init; } = 1.0;
+
+    public int MoveMsPerCell { get; init; } = 1000;
+
+    public int TurnMsPer90 { get; init; } = 300;
+
+    public long MaxTicks { get; init; } = 100_000;
+}
+
+/// ExitCode: 0 정상(MaxTicks 또는 취소), 4 송신 400(검증 실패)
+public sealed record FleetRunResult(long Ticks, int TasksCreated, int TasksCompleted, int TasksFailed,
+    long Overruns, TimeSpan StallTime, int ExitCode);
