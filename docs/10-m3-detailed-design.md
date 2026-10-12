@@ -269,6 +269,7 @@ return {'BUSY'}
 | DB 일시 오류 | ack · nack 하지 않고 같은 배치를 백오프(200ms → ×2 → 5s) 재시도. 그동안 그 파티션 소비가 멈춘다(prefetch 소진) | 전달 횟수를 올리지 않는다(08 §8). PostgreSQL 다운 동안 큐가 버퍼(07) |
 | 역직렬화 실패 · 모르는 `schemaVersion` | 그 메시지만 `BasicReject(requeue: false)` → DLX → `fleet.dlq` | 독 메시지. 같은 배치 나머지는 계속 |
 | 상태 전이 위반 | `robot_status_log`에 **`valid = false`로 영수증을 남기고**, `robot_state`는 갱신하지 않는다. `fleet.invalid`로 발행(확인 대기) 후 ack | 03. 영수증을 남겨야 Reconcile 차집합(기준 1 · 유실)과 위반 수(기준 3 · 순서)가 섞이지 않는다 |
+| (통지의 보장 수준) | `fleet.invalid` 통지는 커밋 뒤에 하므로 발행 실패 후 재시도하면 누락될 수 있다. **통지는 best-effort, 진실은 `robot_status_log.valid`** | 위반 집계 · 조사는 통지가 아니라 영수증 기준 |
 | 프로세스가 죽음 | 미확인분은 브로커가 반환 → 다음 활성 소비자가 재처리 → 중복은 테이블이 막는다 | 반복 크래시는 `x-delivery-limit 20` → DLQ |
 
 ### 이벤트별 저장

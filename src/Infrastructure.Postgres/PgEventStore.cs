@@ -145,7 +145,7 @@ public sealed class PgEventStore : IEventStore
                 wait_ms = COALESCE(EXCLUDED.wait_ms, task_history.wait_ms)
             WHERE EXCLUDED.status > task_history.status
             """;
-        var batch = new NpgsqlBatch(conn, tx);
+        await using var batch = new NpgsqlBatch(conn, tx);
         foreach (var row in rows.Where(r => inserted.Contains(r.EventId)))
         {
             var h = histories[row.EventId];
@@ -174,7 +174,6 @@ public sealed class PgEventStore : IEventStore
         }
 
         if (batch.BatchCommands.Count > 0) await batch.ExecuteNonQueryAsync(ct);
-        await batch.DisposeAsync();
         return (inserted.Count, rows.Count - inserted.Count);
     }
 
