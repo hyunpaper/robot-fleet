@@ -1,0 +1,26 @@
+{
+  "mapId": "test-corridor",
+  "version": 1,
+  "width": 9,
+  "height": 7,
+  "cellSizeMeters": 1.0,
+  "grid": [
+    "111111111",
+    "120000021",
+    "111111111",
+    "000010000",
+    "111111111",
+    "130000041",
+    "111111111"
+  ],
+  "stations": [
+    {"id": "ST-01", "x": 1, "y": 1, "type": "pickup", "equipmentId": "EQ-01"},
+    {"id": "ST-02", "x": 7, "y": 1, "type": "dropoff", "equipmentId": "EQ-02"}
+  ],
+  "chargers": [
+    {"id": "CH-01", "x": 1, "y": 5}
+  ],
+  "parkings": [
+    {"id": "PK-01", "x": 7, "y": 5}
+  ]
+}

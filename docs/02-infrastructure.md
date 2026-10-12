@@ -332,8 +332,12 @@ spec:
         target: { type: Utilization, averageUtilization: 70 }
 ```
 
-> **maxReplicas는 RabbitMQ 파티션 수를 넘지 않게 설정한다.**
-> 파티션이 8개인데 워커를 16개 띄우면 8개는 아무 메시지도 못 받는다.
+> **maxReplicas는 RabbitMQ 파티션 수(16)를 넘지 않게 설정한다.**
+> 파티션이 16개인데 워커를 32개 띄우면 16개는 아무 메시지도 못 받는다.
+
+워커 수가 바뀔 때의 파티션 재배정(명부 기반 배정 + Single Active Consumer)은 01 "워커 수가 변할 때"를 따른다.
+HPA의 `stabilizationWindowSeconds`는 scaleDown 300초로 둔다. 재배정마다 소비자 취소·재구독이 일어나므로
+자주 오르내리면 그 자체가 지연이 된다.
 
 큐 적체량 기반 스케일링이 더 정확하지만, 커스텀 메트릭 어댑터가 필요하다.
 초기엔 CPU 기준으로 하고, M7 실험 단계에서 전환을 검토한다.
@@ -354,7 +358,7 @@ spec:
 |---|---|---|
 | 워커 pod 강제 종료 | `kubectl delete pod event-worker-xxx` | 메시지 유실 0, 재처리 시 중복 없음 |
 | RabbitMQ 재시작 | `kubectl rollout restart sts/rabbitmq` | 재연결, persistent 메시지 보존 |
-| Redis 플러시 | `redis-cli FLUSHDB` | 락 소실 후 복구 동작 |
+| Redis 플러시 | `redis-cli FLUSHDB` | `409 state_lost` → Simulator 틱 정지 → 락 재주장 → 재개 (01 "Redis 상태 소실 복구"). 복구 중 로봇 겹침 0 |
 | 노드 drain | `kubectl drain node-2` | pod 재배치, 서비스 유지 |
 | 네트워크 지연 | `tc qdisc add ... delay 200ms` | 이동 판단 지연 시 동작 |
 | DB 연결 끊김 | NetworkPolicy로 차단 | readiness 실패, liveness 유지 |

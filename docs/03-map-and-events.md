@@ -110,9 +110,11 @@ public sealed class Robot
     public RobotStatus Status { get; set; }
     public string? CurrentTaskId { get; set; }
     public int     BatteryPercent { get; set; }
-    public IReadOnlyList<Point> PlannedPath { get; set; }
+    public IReadOnlyList<PathStep> PlannedPath { get; set; }   // 칸 + 진입 방향 (06 참조)
     public int     PathIndex  { get; set; }      // 경로상 현재 위치
 }
+
+public readonly record struct PathStep(Point Cell, Heading Heading);   // Heading = 이 칸에 진입한 방향
 
 public enum RobotStatus : byte
 {
@@ -167,6 +169,30 @@ public enum TaskStatus : byte
 
 ---
 
+## 이벤트 발행 주체
+
+**모든 이벤트는 Simulator가 발행한다.** FleetController는 판정 결과를 배치 응답에 실어
+돌려줄 뿐 IngestApi를 호출하지 않는다.
+
+| 이벤트 | 발생 근거 (누가 사실을 아는가) | 발행자 |
+|---|---|---|
+| RobotTelemetry | 로봇 위치·상태 — Simulator가 보유 | Simulator |
+| TaskCreated | 작업 생성기 — Simulator 내부 | Simulator |
+| TaskAssigned | FleetController 할당 API 응답 | Simulator (응답을 이벤트로 변환) |
+| TaskStarted / TaskCompleted / TaskFailed | 적재·하역 완료, 도착, 실패 — Simulator가 판정 | Simulator |
+| ConflictDetected | 배치 이동 판정 응답의 `granted=false` 항목 | Simulator (응답을 이벤트로 변환) |
+| DeadlockDetected | 배치 이동 판정 응답의 `deadlock` 항목 | Simulator (응답을 이벤트로 변환) |
+| PathReplanned | 재계획 API 응답 (`oldLength/newLength/computeMs`) | Simulator (응답을 이벤트로 변환) |
+| RobotStatusChanged | 로봇 상태 전이 — Simulator가 수행 | Simulator |
+
+> **발행자를 하나로 두는 이유** — FleetController는 무상태·다중 pod다. 두 서비스가
+> 같은 로봇의 이벤트를 따로 보내면 `RobotStatusChanged`(Simulator)와
+> `ConflictDetected`(FleetController)의 선후를 어느 쪽도 보장할 수 없다.
+> Simulator 한 곳에서 **틱 안의 발생 순서대로 번호를 매겨** 내보내면 순서 문제가 사라지고,
+> FleetController에는 큐 클라이언트도 재시도 로직도 필요 없어진다. 01 다이어그램의 ②가 이 경로다.
+
+---
+
 ## 이벤트 스키마
 
 ### 공통 봉투
@@ -175,7 +201,7 @@ public enum TaskStatus : byte
 
 ```json
 {
-  "eventId":    "018f3c2a-...",          // UUID v7 — 시간순 정렬 가능
+  "eventId":    "018f3c2a-7b1e-7c3d-9a2f-0123456789ab/17",   // "{batchId}/{index}"
   "eventType":  "RobotTelemetry",
   "mapId":      "factory-a",
   "tick":       142057,                   // 시뮬레이터 틱 번호
@@ -186,12 +212,46 @@ public enum TaskStatus : byte
 
 | 필드 | 용도 |
 |---|---|
-| `eventId` | **멱등 키**. UUID v7을 쓰면 시간순 정렬이 되어 디버깅에 유리 |
+| `eventId` | **멱등 키**. `{batchId}/{index}`. `batchId`는 UUID v7이라 시간순 정렬이 되어 디버깅에 유리 |
 | `tick` | 시뮬레이터 내부 논리 시각. 배속을 바꿔도 순서가 보존됨 |
 | `occurredAt` | 실제 발생 시각. 지연 도착 판정에 사용 |
 
 > `tick`과 `occurredAt`을 둘 다 두는 이유 — 배속 60으로 돌리면 실제 1초에
 > 60틱이 지난다. `occurredAt`만으로는 틱 순서를 복원할 수 없다.
+
+### 배치 봉투와 eventId 규칙
+
+Simulator는 틱마다 **그 틱에 발생한 모든 이벤트**를 배치 1건으로 보낸다.
+
+```json
+POST /api/v1/events/batch
+{
+  "batchId":    "018f3c2a-7b1e-7c3d-9a2f-0123456789ab",   // UUID v7, 틱당 1개
+  "mapId":      "factory-a",
+  "tick":       142057,
+  "occurredAt": "2026-04-01T09:14:23.412Z",
+  "events": [
+    { "eventType": "ConflictDetected",  "payload": { "conflictType": "vertex", "x": 18, "y": 6, "robotIds": ["R-002","R-017"], "winnerRobotId": "R-017", "resolution": "wait", "waitMs": 100 } },
+    { "eventType": "RobotStatusChanged","payload": { "robotId": "R-002", "from": 1, "to": 2, "reason": "conflict_wait" } },
+    { "eventType": "RobotTelemetry",    "payload": { "robotId": "R-001", "x": 3,  "y": 12, "heading": 0, "status": 1, "battery": 91 } },
+    { "eventType": "RobotTelemetry",    "payload": { "robotId": "R-002", "x": 18, "y": 7,  "heading": 2, "status": 2, "battery": 64 } }
+  ]
+}
+```
+
+| 규칙 | 내용 |
+|---|---|
+| `batchId` | Simulator가 틱마다 새로 생성. **재전송 시 같은 값**을 쓴다 (Ingest 멱등 단위) |
+| `eventId` | IngestApi가 `"{batchId}/{index}"`로 부여. `index`는 `events` 배열의 0부터 시작하는 위치. 재전송해도 같은 값 → 워커 멱등 단위 |
+| 배열 순서 | **틱 안의 발생 순서.** 같은 로봇의 `RobotStatusChanged`는 그 로봇의 `RobotTelemetry`보다 앞에 둔다 (전이 후 상태가 텔레메트리에 반영됨) |
+| 상한 | 배치당 1000건. 로봇 200대 + 그 틱의 작업·충돌 이벤트로 충분. 넘치면 같은 틱에 두 배치(`batchId` 별도) |
+| 큐 발행 | IngestApi가 항목을 하나씩 큐 메시지로 쪼갠다. 메시지 `MessageId = eventId`, 라우팅 키는 01의 큐별 규칙 |
+
+로봇 200대면 틱당 요청 1건, 초당 10건. 개별 전송이면 초당 2000건.
+
+> **eventId를 UUID가 아닌 `batchId/index`로 두는 이유** — 항목마다 UUID를 만들면
+> Simulator가 재전송 전에 그 UUID들을 보관해야 한다. `batchId` 하나만 보관하면
+> 항목 id는 위치에서 결정되어 재전송·부분 발행 어느 경우에도 같은 값이 나온다.
 
 ---
 
@@ -216,22 +276,8 @@ public enum TaskStatus : byte
 }
 ```
 
-**배치로 전송한다.** 틱마다 로봇 전체를 하나의 배열로 묶는다.
-
-```json
-POST /api/v1/events/batch
-{
-  "mapId": "factory-a",
-  "tick": 142057,
-  "occurredAt": "2026-04-01T09:14:23.412Z",
-  "telemetry": [
-    { "robotId": "R-001", "x": 3,  "y": 12, "heading": 0, "status": 1, "battery": 91 },
-    { "robotId": "R-002", "x": 18, "y": 7,  "heading": 2, "status": 2, "battery": 64 }
-  ]
-}
-```
-
-로봇 200대면 틱당 요청 1건, 초당 10건. 개별 전송이면 초당 2000건.
+**배치로 전송한다.** 틱마다 로봇 전체가 위의 배치 봉투 `events` 배열에 들어간다.
+단독 엔드포인트는 없다.
 
 ---
 
@@ -387,28 +433,44 @@ POST /api/v1/events/batch
 
 ## 상태 전이 규칙
 
-유효하지 않은 전이는 **거부하고 별도 큐로 보낸다.**
+유효하지 않은 전이는 **거부하고 별도 큐로 보낸다.** 아래 표가 전체이며, 표에 없는 전이는 전부 금지다.
 
-```
-Idle ──────► Moving      (작업 할당됨)
-Moving ────► Waiting     (충돌 회피)
-Waiting ───► Moving      (길 열림)
-Moving ────► Loading     (적재 지점 도착)
-Loading ───► Moving      (적재 완료)
-Moving ────► Unloading   (하역 지점 도착)
-Unloading ─► Idle        (작업 완료)
-any ───────► Error       (실패)
-any ───────► Charging    (배터리 부족)
-Charging ──► Idle        (충전 완료)
-```
+| from \ to | Idle | Moving | Waiting | Loading | Unloading | Charging | Error |
+|---|---|---|---|---|---|---|---|
+| **Idle** | — | `task_assigned` | ✗ | ✗ | ✗ | `charge_at_station` | `fault` |
+| **Moving** | `arrived_park` `arrived_charge_denied` | — | `conflict_wait` | `arrived_origin` | `arrived_destination` | `arrived_charger` | `no_path` `replan_exceeded` `fault` |
+| **Waiting** | ✗ | `path_cleared` `replanned` `yield` | — | ✗ | ✗ | ✗ | `deadlock_unresolved` `fault` |
+| **Loading** | ✗ | `load_done` | ✗ | — | ✗ | ✗ | `fault` |
+| **Unloading** | `unload_done` | ✗ | ✗ | ✗ | — | ✗ | `fault` |
+| **Charging** | `charge_done` | ✗ | ✗ | ✗ | ✗ | — | `fault` |
+| **Error** | `recovered` | ✗ | ✗ | ✗ | ✗ | ✗ | — |
+
+셀의 값은 `RobotStatusChanged.reason`이다. 빈틈을 메운 결정과 근거는 다음과 같다.
+
+| 결정 | 근거 |
+|---|---|
+| **Park 작업 완료 = `Moving → Idle`** (`arrived_park`) | 대기 구역 도착은 하역이 없다. `Unloading`을 거치게 하면 Work 시간이 왜곡된다 |
+| **Charge 작업 완료 = `Moving → Charging`** (`arrived_charger`), 충전 끝 = `Charging → Idle` | 충전은 도착 즉시 시작. 충전 시간은 Work가 아니라 별도 `Charging`으로 집계 (05 시간 분해의 네 범주 어디에도 넣지 않고 분모에서 제외) |
+| `Moving → Idle` (`arrived_charge_denied`) | 충전소에 도착했는데 다른 로봇이 쓰고 있으면 옆 칸에서 Idle. 다음 할당 주기에 Charge 작업을 다시 받는다 |
+| **`Idle → Charging`** (`charge_at_station`) | 충전소 칸 위에서 Idle이 된 로봇(충전 완료 직후 할 일이 없는 경우)은 이동 없이 다시 충전 가능. `Charging → Idle → Charging` 반복을 허용 |
+| **`Waiting → Charging` 금지** | 길이 막힌 로봇은 제자리다. 충전은 충전소 칸에서만 일어나므로 `Waiting → Moving → Charging`을 거쳐야 한다. 배터리가 바닥나면 `Waiting → Error(fault)` |
+| 배터리 부족 → Charge 작업 **할당** | "any → Charging"은 폐기. 배터리 부족은 상태 전이가 아니라 **Charge 작업을 최우선으로 할당**하는 일이고, 상태는 작업 흐름을 따라 `Idle → Moving → Charging`으로 간다. 수행 중 작업이 있으면 그 작업을 마친 뒤 할당 |
+| **`Error → Idle`만 허용** (`recovered`) | 복구는 운영자 또는 자동 복구기(M8)가 로봇을 현재 칸에서 Idle로 되돌리는 것. 진행 중이던 작업은 이미 `Failed`이므로 새로 할당받는다. `Error → Moving` 직행 금지 |
+| `Waiting → Moving` 사유 셋 | `path_cleared`(앞이 비어 원래 경로로), `replanned`(우회), `yield`(교착 양보로 회피 지점 이동 시작). 05 재계획률·교착 지표가 이 사유를 센다 |
+| `Loading → Moving`만 허용 | `Loading → Unloading` 금지 (이동 없이 하역 불가). 적재 지점과 하역 지점이 인접해도 한 칸은 이동한다 |
 
 **금지 전이 예시**
 - `Idle → Loading` — 이동 없이 적재할 수 없음
 - `Loading → Unloading` — 이동 없이 하역할 수 없음
 - `Charging → Moving` — 충전 완료 후 Idle을 거쳐야 함
+- `Waiting → Charging` — 충전소 칸까지 이동해야 함
+- `Error → Moving` — Idle을 거쳐 새 작업을 받아야 함
 
 워커가 이를 검증한다. 위반하면 이벤트 순서가 뒤바뀐 것이므로
 `fleet.invalid` 큐로 보내고 메트릭을 올린다. **파티셔닝이 제대로 동작하는지 확인하는 장치**이기도 하다.
+
+> **M1 범위** — `Idle → Moving(task_assigned)`, `Moving → Idle(arrived_park)` 두 전이만 쓴다.
+> 로봇 1대가 목적지에 도착하면 Idle로 돌아간다. 나머지는 M2부터.
 
 ---
 

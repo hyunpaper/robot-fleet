@@ -59,7 +59,8 @@ A* 한 번에 1~5ms. 로봇 200대가 동시에 재계획하면 부담이 되므
 
 - 경로 캐시 (출발·목적지 쌍 기준, 맵이 바뀌지 않으면 재사용)
 - 재계획 쿨다운 (같은 로봇이 100ms 내 재계획 금지)
-- 계획은 FleetController에서만 수행 (Simulator는 요청만)
+- 계획은 FleetController에서만 수행 (Simulator는 요청만). M1에서는 FleetController 라이브러리를
+  Simulator 프로세스 안에서 직접 호출한다 (06 참조) — M3에서 HTTP로 분리해도 인터페이스는 같다
 
 ---
 
@@ -136,8 +137,9 @@ R2 계획 시 [4,5,t1]이 이미 예약됨 → 그 시각을 피해 계획
 다음 한두 칸만 잠그고 전진한다.
 
 ```
-1. 로봇이 다음 칸 (x,y) 진입 시도
-2. Redis: SET cell:lock:{map}:{x}:{y} {robotId} NX EX 2
+1. 로봇이 다음 칸 (x,y) 진입 시도 → 그 틱의 배치 요청에 포함 (01 "틱 단위 배치 이동 판정 API")
+2. FleetController: 배치 내 정렬·순차 판정 후 Lua 1회로 cell:lock:{map}:{x}:{y} 일괄 획득
+   값 = "{robotId}:{tick}:{token}", 만료 = 논리 20틱 + 실시간 TTL (01 "락 만료")
 3. 성공 → 이동
 4. 실패 → 대기 또는 재계획
 5. 이동 완료 후 이전 칸 락 해제
@@ -209,7 +211,7 @@ R3 → R1    ← 순환! 교착
 
 ```csharp
 // Redis에 대기 관계 저장
-// wait:{robotId} → blockedByRobotId   TTL 5s
+// wait:{mapId}:{robotId} → "{blockedByRobotId}:{tick}"   TTL 5s
 
 bool DetectCycle(string startRobot, out List<string> cycle)
 {
@@ -263,13 +265,39 @@ Point? FindYieldPoint(Robot robot, int maxDistance = 5)
 ### 해소 절차
 
 ```
-1. 교착 감지 (대기 1초 초과 + 순환 발견)
-2. DeadlockDetected 이벤트 발행
-3. 양보 로봇 선정
-4. 해당 로봇에게 회피 지점으로 이동 명령
+1. 교착 감지 (대기 1초 초과 + 순환 발견) — 배치 판정 6단계 안에서 실행
+2. 교착 해소 락 획득 (아래) — 실패하면 기존 해소 결과를 읽어 그대로 적용
+3. 양보 로봇 선정, 락 값에 기록
+4. 배치 응답에 deadlock 항목으로 반환 → Simulator가 DeadlockDetected 발행, 양보 로봇에 회피 지점 이동 명령
 5. 회피 완료 후 나머지 로봇 재계획
 6. 양보 로봇도 원래 작업 재계획
 ```
+
+### 교착 해소 락 — 같은 교착을 두 pod가 동시에 풀지 않게
+
+FleetController pod가 여럿이면 같은 순환을 둘이 동시에 발견해 **서로 다른 로봇을 양보**시킬 수 있다.
+두 대가 동시에 후퇴하면 교착은 풀리지만 손실이 2배이고, 최악에는 후퇴 경로가 또 교차한다.
+
+```
+키:   deadlock:resolve:{mapId}:{cycleKey}
+      cycleKey = 순환에 포함된 robotId를 정렬해 '|'로 이은 문자열   예) "R-007|R-012|R-034"
+값:   "{resolverPod}:{tick}:{yieldRobotId}:{yieldToX},{yieldToY}"
+획득: SET key value NX PX {50틱 환산 실시간}
+```
+
+| 규칙 | 근거 |
+|---|---|
+| 키는 **정렬된 robotId 집합** | 순환을 어느 로봇에서 시작해 탐색했든(R-012→R-034→R-007 / R-034→R-007→R-012) 같은 키가 나와야 한다 |
+| `SET NX` 실패 시 **값을 읽어 같은 결정을 적용** | 두 번째 발견자는 새로 결정하지 않는다. 양보 로봇·회피 지점이 한 가지로 수렴 |
+| 양보 로봇에 `robot:yielding:{robotId}` 표시 (TTL 50틱) | 부분 집합 순환(R-007|R-012)을 다른 pod가 따로 찾아내도, 이미 양보 중인 로봇이 끼어 있으면 **새 해소를 시작하지 않는다** |
+| TTL 50틱 | 후퇴 최대 5칸 × 10틱/칸. 그 안에 안 풀리면 다시 탐지되어 새 해소를 시작 |
+| 해소 완료(양보 로봇이 회피 지점 도착) 시 락 삭제 | 같은 로봇들이 다시 교착에 빠지면 새 해소가 가능해야 한다 |
+
+> **배치 API 덕분에 경쟁은 드물다.** 한 틱의 배치는 pod 하나가 통째로 처리하므로
+> 같은 틱에 두 pod가 같은 교착을 보는 일은 구조적으로 없다. 경쟁이 생기는 경우는
+> (a) 배치 타임아웃 후 Simulator가 재전송해 다른 pod가 같은 틱을 다시 처리할 때,
+> (b) M8 이후 백그라운드 탐지기를 따로 둘 때다. 락은 그 두 경우를 위한 보험이다.
+> 보험치고는 싸다 — 교착은 드물고, 키 하나에 `SET NX` 한 번이다.
 
 ---
 

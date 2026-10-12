@@ -59,6 +59,7 @@
 | [03-map-and-events.md](docs/03-map-and-events.md) | 맵 구조, 도메인 모델, 이벤트 스키마 |
 | [04-algorithm.md](docs/04-algorithm.md) | 경로 탐색, 충돌 회피, 교착 처리 |
 | [05-metrics.md](docs/05-metrics.md) | 지표 정의, 실험 설계 |
+| [06-m1-design.md](docs/06-m1-design.md) | M1 상세 설계 — 프로젝트 구조, 타입 시그니처, A* 규약, 틱 루프, 샘플 맵, 테스트 목록, 작업 분할 |
 
 ---
 
@@ -97,17 +98,26 @@ M2까지만 완료해도 포트폴리오 항목 하나가 성립한다.
 ```
 robot-fleet/
 ├── README.md
+├── RobotFleet.sln
+├── Directory.Build.props    # net8.0, Nullable, TreatWarningsAsErrors
 ├── docs/
 ├── src/
-│   ├── Shared/              # 공통 모델, 이벤트 계약
-│   ├── Simulator/           # 가상 공장 + 로봇 시뮬레이터
-│   ├── FleetController/     # 경로 계획, 충돌 회피, 작업 할당
-│   ├── IngestApi/           # 이벤트 수신
-│   ├── EventWorker/         # 이벤트 소비 · 적재 · 집계
-│   └── QueryApi/            # 조회 · 관제 화면 백엔드
+│   ├── Shared/              # 공통 모델 (좌표, 맵, 도메인), 이벤트 계약      — M1
+│   ├── FleetController/     # 경로 계획, 이동 승인 (라이브러리)              — M1
+│   ├── FleetController.Api/ # 위 라이브러리를 감싼 HTTP API                  — M3
+│   ├── Simulator/           # 가상 공장 + 로봇 시뮬레이터 (콘솔)             — M1
+│   ├── IngestApi/           # 이벤트 수신                                   — M3
+│   ├── EventWorker/         # 이벤트 소비 · 적재 · 집계                     — M3
+│   └── QueryApi/            # 조회 · 관제 화면 백엔드                       — M6
+├── tests/
+│   ├── Shared.Tests/
+│   ├── FleetController.Tests/
+│   └── Simulator.Tests/
 ├── deploy/
 │   ├── k3s/                 # 매니페스트
 │   └── monitoring/          # Prometheus, Grafana
 ├── loadtest/                # k6 시나리오
-└── maps/                    # 맵 정의 파일
+└── maps/
+    ├── factory-a.json       # 60×40 기본 맵
+    └── test-corridor.json   # 9×7 테스트 맵 (1칸 통로)
 ```
