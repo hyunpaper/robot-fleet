@@ -29,7 +29,7 @@ public class MapValidationTests
         map.Height.Should().Be(40);
         map.Stations.Should().HaveCount(16);
         map.Chargers.Should().HaveCount(4);
-        map.Parkings.Should().HaveCount(10);
+        map.Parkings.Should().HaveCount(16);
         map[6, 3].Should().Be(CellType.Station);
         map[2, 2].Should().Be(CellType.Blocked);
     }
