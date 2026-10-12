@@ -4,10 +4,10 @@ using FluentAssertions;
 using RobotFleet.Shared.Messaging;
 using RobotFleet.Shared.Pipeline;
 
-namespace RobotFleet.TestSupport.Contracts;
+namespace RobotFleet.Infrastructure.Tests.Contracts;
 
 /// IEventPublisher + IPartitionSubscriber 계약(C-04): confirm · 같은 키 같은 큐 · prefetch · multiple ack ·
-/// SAC 활성 전환과 채널 닫기 반환 · reject → DLQ. InMemoryBroker(L1) · RabbitMQ(L2)가 같은 표를 통과한다. 10 §12
+/// SAC 활성 전환과 채널 닫기 반환 · reject → DLQ. 실제 RabbitMQ에서 돈다. 10 §12
 public abstract class BrokerContract
 {
     protected static readonly TimeSpan Wait = TimeSpan.FromSeconds(5);

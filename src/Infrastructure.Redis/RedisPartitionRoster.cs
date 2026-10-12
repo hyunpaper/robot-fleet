@@ -23,8 +23,6 @@ public sealed class RedisPartitionRoster : IPartitionRoster
         _logger = logger;
     }
 
-    public bool IsConfigured => true;
-
     public async Task<RosterView?> HeartbeatAsync(string workerId, CancellationToken ct)
     {
         try

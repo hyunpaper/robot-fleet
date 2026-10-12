@@ -2,7 +2,7 @@ using FluentAssertions;
 using Microsoft.Extensions.Time.Testing;
 using RobotFleet.Shared.Pipeline;
 
-namespace RobotFleet.TestSupport.Contracts;
+namespace RobotFleet.Infrastructure.Tests.Contracts;
 
 /// IPartitionRoster 계약 — R-01 · R-02 · R-06 중 명부 몫. 10 §7 · §12
 public abstract class RosterContract

@@ -15,6 +15,18 @@
     <ProjectReference Include="../../src/Infrastructure.Redis/RobotFleet.Infrastructure.Redis.csproj" />
     <ProjectReference Include="../../src/Infrastructure.RabbitMq/RobotFleet.Infrastructure.RabbitMq.csproj" />
     <ProjectReference Include="../TestSupport/RobotFleet.TestSupport.csproj" />
+    <ProjectReference Include="../../src/Ingest.Core/RobotFleet.Ingest.Core.csproj" />
+    <ProjectReference Include="../../src/EventWorker.Core/RobotFleet.EventWorker.Core.csproj" />
+    <ProjectReference Include="../../src/Simulator/RobotFleet.Simulator.csproj" />
+    <ProjectReference Include="../../src/Reconcile/RobotFleet.Reconcile.csproj" />
+    <ProjectReference Include="../../src/Hosting/RobotFleet.Hosting.csproj" />
+    <ProjectReference Include="../../src/IngestApi/RobotFleet.IngestApi.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="../../maps/*.json" Link="maps/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>
     <Using Include="Xunit" />

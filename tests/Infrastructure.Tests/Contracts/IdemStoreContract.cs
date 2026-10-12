@@ -2,9 +2,9 @@ using FluentAssertions;
 using Microsoft.Extensions.Time.Testing;
 using RobotFleet.Shared.Pipeline;
 
-namespace RobotFleet.TestSupport.Contracts;
+namespace RobotFleet.Infrastructure.Tests.Contracts;
 
-/// IIdemStore 계약 — 08 §9 상태 전이 표 (I-01~I-08 중 저장소 몫). InMemory(L1) · Redis(L2)가 같은 표를 통과한다. 10 §12
+/// IIdemStore 계약 — 08 §9 상태 전이 표 (I-01~I-08 중 저장소 몫). 실제 Redis에서 돈다. 10 §12
 public abstract class IdemStoreContract
 {
     protected FakeTimeProvider Time { get; } = new(DateTimeOffset.Parse("2026-10-12T00:00:00Z"));

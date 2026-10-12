@@ -9,7 +9,7 @@ public sealed class AssignmentCoordinator
 {
     private static readonly EventCategory[] Categories = [EventCategory.Telemetry, EventCategory.Task, EventCategory.Conflict];
 
-    private readonly IPartitionRoster _roster;
+    private readonly IPartitionRoster? _roster;
     private readonly IPartitionSubscriber _subscriber;
     private readonly EventHandlers _handlers;
     private readonly WorkerOptions _options;
@@ -22,8 +22,9 @@ public sealed class AssignmentCoordinator
     private long _lastBeat = long.MinValue;
     private volatile bool _killed;
 
-    public AssignmentCoordinator(IPartitionRoster roster, IPartitionSubscriber subscriber, EventHandlers handlers,
-                                 WorkerOptions options, TimeProvider time, ILogger<AssignmentCoordinator> logger)
+    /// roster가 null = Redis 미설정 → 단일 워커가 48큐 전부(10 §7). 대체 구현을 두지 않는다
+    public AssignmentCoordinator(IPartitionSubscriber subscriber, EventHandlers handlers, WorkerOptions options,
+                                 TimeProvider time, ILogger<AssignmentCoordinator> logger, IPartitionRoster? roster = null)
     {
         _roster = roster;
         _subscriber = subscriber;
@@ -73,7 +74,7 @@ public sealed class AssignmentCoordinator
         finally
         {
             await StopAllAsync(drain: true);
-            if (_roster.IsConfigured && !_killed)
+            if (_roster is not null && !_killed)
             {
                 try
                 {
@@ -113,7 +114,7 @@ public sealed class AssignmentCoordinator
             if (desired is null) return;   // 명부 불통: 현재 몫 고정
 
             // 2회 연속 같은 결과일 때만 적용. 명부가 없으면(단일 워커) 바로
-            if (_roster.IsConfigured && (_candidate is null || !_candidate.SetEquals(desired)))
+            if (_roster is not null && (_candidate is null || !_candidate.SetEquals(desired)))
             {
                 _candidate = desired;
                 return;
@@ -148,7 +149,7 @@ public sealed class AssignmentCoordinator
     private async Task<SortedSet<int>?> DesiredAsync(CancellationToken ct)
     {
         var all = new SortedSet<int>(Enumerable.Range(0, TopologySpec.Partitions));
-        if (!_roster.IsConfigured) return all;
+        if (_roster is null) return all;
 
         var now = _time.GetTimestamp();
         if (_view is null || _lastBeat == long.MinValue || _time.GetElapsedTime(_lastBeat, now) >= _options.HeartbeatInterval)

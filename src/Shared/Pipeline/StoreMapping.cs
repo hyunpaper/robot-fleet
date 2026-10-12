@@ -19,7 +19,7 @@ public sealed record ConflictLogChange(
 
 public enum MetricsBucket { Move, Work, Wait, Idle }
 
-/// InMemoryEventStore와 PgEventStore가 같은 규칙으로 행을 만든다(계약 테스트가 둘을 묶는다)
+/// 워커 핸들러(해석 검증)와 PgEventStore가 같은 규칙으로 행을 만든다
 public static class StoreMapping
 {
     public static short TaskStatusOf(string eventType) => eventType switch

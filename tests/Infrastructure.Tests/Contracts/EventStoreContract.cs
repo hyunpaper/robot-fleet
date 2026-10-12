@@ -2,9 +2,9 @@ using FluentAssertions;
 using RobotFleet.Shared.Messaging;
 using RobotFleet.Shared.Pipeline;
 
-namespace RobotFleet.TestSupport.Contracts;
+namespace RobotFleet.Infrastructure.Tests.Contracts;
 
-/// IEventStore 계약 — W-10~W-12 · 중복 · RETURNING 집계(C-03). InMemory(L1) · Postgres(L2). 10 §6 · §12
+/// IEventStore 계약 — W-10~W-12 · 중복 · RETURNING 집계(C-03). 실제 PostgreSQL. 10 §6 · §12
 public abstract class EventStoreContract
 {
     protected const string Map = "m-contract";

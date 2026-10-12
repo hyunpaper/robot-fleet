@@ -7,7 +7,7 @@ using RobotFleet.Infrastructure.RabbitMq;
 using RobotFleet.Shared.Messaging;
 using RobotFleet.Shared.Pipeline;
 using RobotFleet.TestSupport;
-using RobotFleet.TestSupport.Contracts;
+using RobotFleet.Infrastructure.Tests.Contracts;
 
 namespace RobotFleet.Infrastructure.Tests.RabbitMq;
 

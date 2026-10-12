@@ -8,14 +8,9 @@
     <PackageReference Include="xunit" Version="2.9.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
     <PackageReference Include="FluentAssertions" Version="6.12.2" />
-    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" Version="8.10.0" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/Ingest.Core/RobotFleet.Ingest.Core.csproj" />
-    <ProjectReference Include="../../src/EventWorker.Core/RobotFleet.EventWorker.Core.csproj" />
-    <ProjectReference Include="../../src/Infrastructure.InMemory/RobotFleet.Infrastructure.InMemory.csproj" />
-    <ProjectReference Include="../TestSupport/RobotFleet.TestSupport.csproj" />
-    <ProjectReference Include="../../src/PipelineHost/RobotFleet.PipelineHost.csproj" />
   </ItemGroup>
   <ItemGroup>
     <Using Include="Xunit" />

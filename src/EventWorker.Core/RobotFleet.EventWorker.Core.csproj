@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
-    <InternalsVisibleTo Include="RobotFleet.Pipeline.Tests" />
+    <InternalsVisibleTo Include="RobotFleet.Infrastructure.Tests" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="prometheus-net" Version="8.2.1" />

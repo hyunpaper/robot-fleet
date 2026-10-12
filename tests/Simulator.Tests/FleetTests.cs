@@ -1,7 +1,6 @@
 using FluentAssertions;
 using RobotFleet.FleetController.Arbitration;
 using RobotFleet.FleetController.Planning;
-using RobotFleet.Infrastructure.InMemory;
 using RobotFleet.Shared.Domain;
 using RobotFleet.Shared.Geometry;
 using RobotFleet.Shared.Map;
@@ -13,7 +12,7 @@ using Xunit;
 
 namespace RobotFleet.Simulator.Tests;
 
-/// G-01~G-06 · E-01~E-04 (10 §12)
+/// G-01~G-06 · E-01~E-04 (10 §12). 인프라 없는 순수 로직 — 이벤트는 CaptureEvents로 받는다
 public sealed class FleetTests
 {
     private static readonly GridMap Factory = MapLoader.LoadFromFile(Path.Combine(AppContext.BaseDirectory, "maps", "factory-a.json"));
@@ -29,9 +28,11 @@ public sealed class FleetTests
 
     private static async Task<(FleetRunResult Result, List<EventBatch> Batches)> RunAsync(FleetOptions options)
     {
-        var sink = new InMemoryEventSink(1_000_000);
-        var result = await new FleetSimulation(Factory, options, sink, new NoDelay(), null).RunAsync(default);
-        return (result, sink.Batches.ToList());
+        var batches = new List<EventBatch>();
+        var sim = new FleetSimulation(Factory, options, sink: null, new NoDelay(), null);
+        sim.CaptureEvents(batches.Add);
+        var result = await sim.RunAsync(default);
+        return (result, batches);
     }
 
     private static IEnumerable<(EventBatch Batch, EventItem Item)> Items(IEnumerable<EventBatch> batches) =>

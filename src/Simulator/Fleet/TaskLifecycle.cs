@@ -18,7 +18,7 @@ internal sealed class TaskLifecycle : IRobotObserver
     private readonly GridMap _map;
     private readonly IPathPlanner _planner;
     private readonly FleetOptions _options;
-    private readonly EventCollector? _events;
+    private EventCollector? _events;
     private readonly Dictionary<string, Run> _runs = new(StringComparer.Ordinal);
 
     public TaskLifecycle(GridMap map, IPathPlanner planner, FleetOptions options, EventCollector? events)
@@ -30,6 +30,8 @@ internal sealed class TaskLifecycle : IRobotObserver
     }
 
     public RobotStepper? Stepper { get; set; }
+
+    public void UseEvents(EventCollector events) => _events = events;
 
     public int Completed { get; private set; }
 

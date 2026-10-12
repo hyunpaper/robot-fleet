@@ -20,8 +20,6 @@ public sealed record RosterView(IReadOnlyList<string> Members)
 
 public interface IPartitionRoster
 {
-    bool IsConfigured { get; }
-
     /// null = 불통
     Task<RosterView?> HeartbeatAsync(string workerId, CancellationToken ct);
 

@@ -14,7 +14,6 @@
     <ProjectReference Include="../../src/Simulator/RobotFleet.Simulator.csproj" />
     <ProjectReference Include="../../src/Shared/RobotFleet.Shared.csproj" />
     <ProjectReference Include="../../src/FleetController/RobotFleet.FleetController.csproj" />
-    <ProjectReference Include="../../src/Infrastructure.InMemory/RobotFleet.Infrastructure.InMemory.csproj" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="../Shared.Tests/TestMaps.cs" Link="TestMaps.cs" />

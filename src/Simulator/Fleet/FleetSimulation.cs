@@ -28,7 +28,8 @@ public sealed class FleetSimulation
     private readonly TaskDispatcher _dispatcher = new();
     private readonly TaskLifecycle _lifecycle;
     private readonly RobotStepper _stepper;
-    private readonly EventCollector? _events;
+    private EventCollector? _events;
+    private Action<EventBatch>? _onBatch;
     private long _tick;
     private long _overruns;
     private TimeSpan _stall;
@@ -77,8 +78,17 @@ public sealed class FleetSimulation
 
     public IReadOnlyList<Robot> Robots => _robots;
 
-    /// 매 틱 끝에 부른다(in-process 시험의 장애 주입 지점)
+    /// 매 틱 끝에 부른다(통합 시험의 장애 주입 지점)
     public Func<long, CancellationToken, Task>? AfterTick { get; set; }
+
+    /// 확정된 배치를 송신 버퍼에 넣기 전에 넘겨받는다(관찰 · 로그용). sink가 없어도 이벤트를 만든다
+    public void CaptureEvents(Action<EventBatch> onBatch)
+    {
+        _onBatch += onBatch;
+        if (_events is not null) return;
+        _events = new EventCollector(_map.MapId, _options.TickMs, _time);
+        _lifecycle.UseEvents(_events);
+    }
 
     public long Tick => _tick;
 
@@ -118,7 +128,8 @@ public sealed class FleetSimulation
             _lifecycle.FlushOpenConflicts(_tick);
             foreach (var batch in _events.Complete([]).Where(b => b.Events.Count > 0))
             {
-                if (!await WriteAsync(batch, CancellationToken.None)) exit = ExitSinkClosed;
+                _onBatch?.Invoke(batch);
+                if (_sink is not null && !await WriteAsync(batch, CancellationToken.None)) exit = ExitSinkClosed;
             }
         }
 
@@ -149,7 +160,8 @@ public sealed class FleetSimulation
         foreach (var batch in _events.Complete(_robots.Select(_lifecycle.TelemetryOf)))
         {
             SimulatorMetrics.CountGenerated(batch);
-            if (!await WriteAsync(batch, ct)) return false;
+            _onBatch?.Invoke(batch);
+            if (_sink is not null && !await WriteAsync(batch, ct)) return false;
         }
 
         return true;

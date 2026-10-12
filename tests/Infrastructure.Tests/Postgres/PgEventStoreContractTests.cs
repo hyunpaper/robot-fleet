@@ -6,7 +6,7 @@ using RobotFleet.Infrastructure.Postgres;
 using RobotFleet.Infrastructure.Postgres.Migrations;
 using RobotFleet.Shared.Pipeline;
 using RobotFleet.TestSupport;
-using RobotFleet.TestSupport.Contracts;
+using RobotFleet.Infrastructure.Tests.Contracts;
 
 namespace RobotFleet.Infrastructure.Tests.Postgres;
 

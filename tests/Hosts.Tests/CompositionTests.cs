@@ -2,7 +2,6 @@ using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using RobotFleet.Hosting;
-using RobotFleet.Infrastructure.Redis;
 using RobotFleet.Shared.Pipeline;
 
 namespace RobotFleet.Hosts.Tests;
@@ -23,13 +22,14 @@ public sealed class CompositionTests
     }
 
     [Fact]
-    public void H02_Ingest_EmptyRedis_UsesBypassIdemStore()
+    public void H02_Ingest_EmptyRedis_RegistersNoIdemStore()
     {
         var services = new ServiceCollection().AddLogging();
         services.AddFleetIngest(Config(("ConnectionStrings:RabbitMq", "amqp://localhost")));
 
         using var sp = services.BuildServiceProvider();
-        sp.GetRequiredService<IIdemStore>().Should().BeOfType<BypassIdemStore>();
+        sp.GetService<IIdemStore>().Should().BeNull();
+        sp.GetService<IPartitionRoster>().Should().BeNull();
     }
 
     [Fact]

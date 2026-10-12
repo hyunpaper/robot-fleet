@@ -4,7 +4,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using RobotFleet.Infrastructure.Redis;
 using RobotFleet.Shared.Pipeline;
 using RobotFleet.TestSupport;
-using RobotFleet.TestSupport.Contracts;
+using RobotFleet.Infrastructure.Tests.Contracts;
 using StackExchange.Redis;
 
 namespace RobotFleet.Infrastructure.Tests.Redis;
@@ -88,11 +88,4 @@ public sealed class RedisScriptTests
     [InlineData("roster_heartbeat.lua")]
     public void Lua_스크립트가_어셈블리에_내장된다(string name) =>
         RedisConnectionProvider.Script(name).Should().Contain("KEYS[1]");
-
-    [Fact]
-    public async Task Redis_미설정이면_Bypass()
-    {
-        var store = new BypassIdemStore();
-        (await store.TryBeginAsync("b", default)).Status.Should().Be(IdemBeginStatus.Bypass);
-    }
 }

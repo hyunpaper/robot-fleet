@@ -8,12 +8,13 @@ namespace RobotFleet.Ingest;
 /// 검증 → 멱등 → 발행 → 응답. 10 §4 · 08 §9
 public sealed class IngestService
 {
-    private readonly IIdemStore _idem;
+    private readonly IIdemStore? _idem;
     private readonly IEventPublisher _publisher;
     private readonly TimeProvider _time;
     private readonly ILogger<IngestService> _logger;
 
-    public IngestService(IIdemStore idem, IEventPublisher publisher, TimeProvider time, ILogger<IngestService> logger)
+    /// idem이 null = Redis 미설정 → 멱등 1단계를 건너뛴다(fail-open, 10 §9). 대체 구현을 두지 않는다
+    public IngestService(IEventPublisher publisher, TimeProvider time, ILogger<IngestService> logger, IIdemStore? idem = null)
     {
         _idem = idem;
         _publisher = publisher;
@@ -74,14 +75,15 @@ public sealed class IngestService
         // 5. 응답
         if (outcome.ReliableFailed > 0)
         {
-            if (begin.Status is IdemBeginStatus.Begin or IdemBeginStatus.Takeover)
+            if (_idem is not null && begin.Status is IdemBeginStatus.Begin or IdemBeginStatus.Takeover)
                 await SafeAsync(() => _idem.AbortAsync(batch.BatchId, begin.PendingSinceMs, ct), "Abort");
             IngestMetrics.Batches.WithLabels("unavailable").Inc();
             return Respond(503, new IngestResponseBody(batch.BatchId, 0, outcome.TelemetryDropped, false,
                 $"task · conflict {outcome.ReliableFailed}건 확인 실패"), retryAfter: 1);
         }
 
-        await SafeAsync(() => _idem.CompleteAsync(batch.BatchId, ct), "Complete");
+        if (_idem is not null)
+            await SafeAsync(() => _idem.CompleteAsync(batch.BatchId, ct), "Complete");
         IngestMetrics.Batches.WithLabels("accepted").Inc();
         return Respond(202, new IngestResponseBody(batch.BatchId, batch.Events.Count, outcome.TelemetryDropped, false, null));
     }
@@ -142,6 +144,7 @@ public sealed class IngestService
 
     private async Task<IdemBegin> TryBeginAsync(string batchId, CancellationToken ct)
     {
+        if (_idem is null) return new IdemBegin(IdemBeginStatus.Bypass, 0);
         try
         {
             return await _idem.TryBeginAsync(batchId, ct);
