@@ -125,8 +125,8 @@ Simulator ──(틱마다 배치 이동 요청)──► FleetController ◄─
 | 노드 | 주소 | 역할 |
 |---|---|---|
 | cp-1 | 192.168.10.10 | control plane (워크로드 없음), 2 vCPU·2GB |
-| worker-1 | 192.168.10.11 | 애플리케이션, PostgreSQL, Redis·RabbitMQ 멤버, 6GiB |
-| worker-2 | 192.168.10.12 | 애플리케이션, Redis·RabbitMQ 멤버, 6GiB |
-| worker-3 | 192.168.10.13 | 애플리케이션, 모니터링, Redis·RabbitMQ 멤버, 6GiB |
+| worker-1 | 192.168.10.11 | 애플리케이션, PostgreSQL, Redis·RabbitMQ 멤버, 6GB |
+| worker-2 | 192.168.10.12 | 애플리케이션, Redis·RabbitMQ 멤버, 6GB |
+| worker-3 | 192.168.10.13 | 애플리케이션, 모니터링, Redis·RabbitMQ 멤버, 6GB |
 
-Redis(primary 1 + replica 2 + Sentinel 3)와 RabbitMQ(3노드, quorum queue)는 worker 3대에 분산된다. → 07, 08
+Redis(primary 1 + replica 2 + Sentinel 3)와 RabbitMQ(3노드, quorum queue)는 worker 3대에 분산된다. 자세한 내용은 07, 08 문서 참고.
