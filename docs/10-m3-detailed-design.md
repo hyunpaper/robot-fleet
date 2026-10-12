@@ -9,10 +9,11 @@
 | # | 09 원문 | 10 결정 | 근거 |
 |---|---|---|---|
 | D1 | 메시징 라이브러리 MassTransit 기본 | **RabbitMQ.Client 7 직접 사용** | §3 항목별 표. 01 토폴로지 7개 중 4개가 MassTransit 기본 동작과 정면으로 부딪친다(봉투 · 오류 큐 · 처리 순서 ack · 반환 의미론) |
-| D2 | 인프라 인터페이스 5종 | **6종** — `IPartitionSubscriber`(소비 쪽) 추가 | `IEventPublisher`는 발행만 다룬다. 워커의 구독 · SAC · ack · 반환을 fake로 바꾸려면 소비 쪽 경계가 따로 있어야 한다 |
+| D2 | 인프라 인터페이스 5종 | **6종** — `IPartitionSubscriber`(소비 쪽) 추가 | `IEventPublisher`는 발행만 다룬다. 워커의 구독 · SAC · ack · 반환은 경계가 따로 있어야 한다 |
 | D3 | 파티션 생성은 기동 시와 자정 | 기동 시 + **매시 정각**, 그리고 **DEFAULT 파티션** | 자정 타이머 하나는 그 순간 재시작 중이면 놓친다. 매시 확인은 멱등이라 비용이 없다. DEFAULT는 그래도 빠진 날짜의 행을 받아 INSERT 실패(=유실)를 원천 차단 |
 | D4 | (01) `metrics_minute` 멱등은 Redis `metrics_applied` 집합 | **같은 PG 트랜잭션의 `INSERT … ON CONFLICT DO NOTHING RETURNING`** 결과로만 집계 | M3의 Redis는 선택이다(09). 실제로 새로 들어간 행만 집계하면 별도 집합 없이 정확히 1회. 집합 기록과 집계가 같은 트랜잭션이라 사이에서 죽어도 어긋나지 않는다 |
 | D5 | (09) EventWorker는 HTTP 없음 | 업무 API는 없고 **관리 포트**(`/metrics` · `/health/*`)만 | 09 완료 기준 2~6의 메트릭 출처이고 readiness가 필요하다 |
+| D7 | (09) L1 인메모리 fake · in-process 모드 · 계약 테스트 InMemory 실행 | **대역 없음.** 인프라가 닿는 검증은 실제 RabbitMQ · Redis · PostgreSQL 통합 테스트만(§12). `Infrastructure.InMemory` · `PipelineHost` 삭제 | 사용자 지시. 대역이 실제와 다르면 거짓 안심이 된다. 서버가 없으면 통합 테스트는 skip |
 | D6 | (09) 적재 집합 = `task_history` 전이 · `conflict_log` | `task_event_log` · `robot_status_log`(이벤트당 1행, `event_id` PK) 추가 | `task_history`는 최종 상태만 남아 "어느 이벤트가 들어왔는가"를 증명할 수 없다. 이벤트 단위 영수증이 있어야 차집합이 정확하다 |
 
 ---
@@ -119,7 +120,7 @@
 | 범주 · 지속성 | `EventCategories.Of(eventType)` — 03 "이벤트 → 큐 매핑" 표 그대로. PathReplanned는 conflict 범주(08 §8) | |
 | 메시지 속성 | `MessageId = eventId`, `Type = eventType`, `ContentType = application/json`, `DeliveryMode` = 범주별, 헤더 `x-schema-version` | 워커가 본문을 열기 전에 분기 가능 |
 | 토폴로지 명세 | `TopologySpec` — exchange · 큐 · 인자 · 바인딩을 **데이터로** 정의. 선언 실행은 인프라 프로젝트 | Shared를 외부 패키지 없이 유지(09 "Shared.Messaging에 토폴로지 선언"을 데이터로 해석) |
-| 인터페이스 6종 | `IEventSink` · `IEventPublisher` · `IIdemStore` · `IEventStore` · `IPartitionRoster` · `IPartitionSubscriber` 를 `src/Shared/Pipeline/` 에 | 인프라 · fake · 서비스가 순환 없이 참조 |
+| 인터페이스 6종 | `IEventSink` · `IEventPublisher` · `IIdemStore` · `IEventStore` · `IPartitionRoster` · `IPartitionSubscriber` 를 `src/Shared/Pipeline/` 에 | 인프라 · 서비스가 순환 없이 참조 |
 
 ---
 
@@ -251,7 +252,7 @@ return {'BUSY'}
 | 행 | 이벤트당 1행 `{"eventId","batchId","tick","eventType","category","key"}` — `key`는 라우팅 키(telemetry 대조용 `robotId`) |
 | 근거 | 202 이후 = Ingest가 책임을 넘겨받은 집합. 202 전 버퍼분은 종료 시 `unsent`로 따로 센다 |
 
-`IIngestClient` 구현 2개: `HttpIngestClient`(원격) · `InProcessIngestClient`(같은 프로세스의 `IngestService` 직접 호출, §9).
+`IIngestClient` 구현은 `HttpIngestClient` 하나다(D7).
 
 ---
 
@@ -369,14 +370,13 @@ RETURNING robot_id, status, occurred_at;
 
 | 모드 | 진입점 | 구성 |
 |---|---|---|
-| **in-process** | `src/PipelineHost` | Simulator(`FleetSimulation`) + `InProcessIngestClient` → `IngestService` → `InMemoryBroker` → `WorkerService` → `InMemoryEventStore`. 인프라 없음. 종료 시 대조 결과 출력 |
 | **원격 인프라** | Simulator · IngestApi · EventWorker 각 프로세스 | 실제 RabbitMQ · Redis · PostgreSQL |
 | (M5) k3s | 같은 이미지 | 같은 설정 키, ConfigMap · Secret |
 
 | 설정 키 | 의미 | 없을 때 |
 |---|---|---|
 | `ConnectionStrings:RabbitMq` | AMQP URI | IngestApi · EventWorker 기동 실패 |
-| `ConnectionStrings:Redis` | StackExchange.Redis 구성 문자열 | fail-open · 단일 워커 |
+| `ConnectionStrings:Redis` | StackExchange.Redis 구성 문자열 | 등록하지 않는다 → `IngestService`는 멱등 1단계 생략, `AssignmentCoordinator`는 단일 워커(대체 구현 없이 `null` 경로) |
 | `ConnectionStrings:Postgres` | Npgsql 연결 문자열 | EventWorker 기동 실패 |
 | `Fleet:Topology:Prefix` | 이름 접두사 | 빈 값 |
 
@@ -407,7 +407,7 @@ RabbitMQ · Redis · PostgreSQL은 사용자가 준비하고, 저장소는 **요
 
 | 결정 | 근거 |
 |---|---|
-| 대상 호스트: IngestApi · EventWorker · PipelineHost · Reconcile. Simulator는 접속 정보가 없고(`--ingest` URL만) 같은 순서로 `Fleet:*` 키만 읽는다 | 모든 진입점이 같은 규칙 |
+| 대상 호스트: IngestApi · EventWorker · Reconcile. Simulator는 접속 정보가 없고(`--ingest` URL만) 같은 순서로 `Fleet:*` 키만 읽는다 | 모든 진입점이 같은 규칙 |
 | `appsettings.Local.json`을 추가한 **뒤 환경 변수 · 명령행을 다시 추가**한다 | `WebApplication.CreateBuilder`는 이미 환경 변수를 넣어 두므로, 그 뒤에 JSON을 붙이면 JSON이 환경 변수를 이긴다. k3s Secret이 무시되는 사고를 막는다 |
 | 빈 문자열 = 설정 없음 (`string.IsNullOrWhiteSpace`) | 커밋된 `appsettings.json`의 빈 값이 "설정됨"으로 읽히지 않게. Redis 빈 값 → fail-open(§4 · §7) |
 | `appsettings.Local.json`은 있을 때만 출력 폴더로 복사(csproj `Condition="Exists(...)"`) | `dotnet run` · 빌드 산출물 실행 어느 쪽이든 같은 파일을 읽는다 |
@@ -493,108 +493,71 @@ WHERE s.category = 'telemetry'
 
 ## 12. 테스트
 
+> **테스트 대역(fake)을 두지 않는다**(D7, 사용자 지시). 인프라가 닿는 동작은 **실제 RabbitMQ · Redis · PostgreSQL**로만 검증한다.
+> 인프라와 무관한 순수 로직(직렬화 · 검증 규칙 · 상태 전이 표 · 작업 생애주기 · A* 등)만 인프라 없이 돈다.
+
+| 층 | 대상 | 실행 조건 |
+|---|---|---|
+| **순수 로직** | 아래 "순수 로직 테스트" 표 | 항상. `dotnet test` 기본 |
+| **통합** | 아래 "통합 테스트" 표 — 실제 서버 | 접속 정보가 있을 때. 없으면 **skip으로 표시**(실패 아님) |
+| **E2E(수동)** | X-01~X-04 | 사람이 실행 · 보고서 첨부 |
+
 ### 공통 장치
 
 | 장치 | 결정 | 근거 |
 |---|---|---|
-| L2 skip | `[IntegrationFact("FLEET_TEST_RABBITMQ")]` — 인자는 **설정 이름**. `TestEnv.Get(이름)`이 비면 `Skip = "FLEET_TEST_RABBITMQ 없음"`. `[Trait("Category","Integration")]` | 추가 테스트 패키지 없이 xUnit 2.9에서 **skip으로 표시**된다(실패 아님) |
+| skip | `[IntegrationFact("FLEET_TEST_RABBITMQ", …)]` — 인자는 **설정 이름**. `TestEnv.Get(이름)`이 하나라도 비면 `Skip = "{이름} 없음"`. `[Trait("Category","Integration")]` | 추가 테스트 패키지 없이 xUnit 2.9에서 **skip으로 표시**된다 |
 | 설정 이름 | `FLEET_TEST_RABBITMQ`(AMQP URI) · `FLEET_TEST_REDIS` · `FLEET_TEST_PG` · `FLEET_TEST_RABBITMQ_MGMT`(관리 API URL, 선택) | 09 |
-| 값 출처 (앞이 이김) | ① 같은 이름의 환경 변수 ② `tests/appsettings.Test.Local.json`(**gitignore, 사용자가 실제 값**) ③ `tests/appsettings.Test.json`(커밋, 네 키 모두 빈 문자열). 빈 문자열 = 없음 | 사용자는 파일에 넣고, CI는 환경 변수로 넣는다. 키 이름이 환경 변수 이름과 같아 매핑 표가 없다 — 테스트 코드는 출처를 모른다 |
-| 파일 찾기 | `AppContext.BaseDirectory`에서 위로 올라가 `RobotFleet.sln`이 있는 폴더를 찾고 그 아래 `tests/` | 테스트 프로젝트마다 파일을 복사하지 않는다. 어느 테스트 프로젝트든 같은 파일 |
+| 값 출처 (앞이 이김) | ① 같은 이름의 환경 변수 ② `tests/appsettings.Test.Local.json`(**gitignore, 사용자가 실제 값**) ③ `tests/appsettings.Test.json`(커밋, 네 키 모두 빈 문자열). 빈 문자열 = 없음 | 사용자는 파일에 넣고, CI는 환경 변수로 넣는다 |
+| 파일 찾기 | `AppContext.BaseDirectory`에서 위로 올라가 `RobotFleet.sln`이 있는 폴더 아래 `tests/` | 어느 테스트 프로젝트든 같은 파일 |
 | 실행 id | `t{yyyyMMddHHmmss}{4자리 난수}` | 공용 서버를 여러 실행이 나눠 쓴다 |
 | 격리 | RabbitMQ: 토폴로지 접두사 `{runId}.` / Redis: 키 접두사 `{runId}:` / PostgreSQL: 스키마 `t_{runId}` + `search_path` | vhost 생성은 관리자 권한이 필요하다. 접두사는 일반 권한으로 된다 |
-| 정리 | 테스트 클래스 `IAsyncLifetime.DisposeAsync`에서 삭제. 시작 시 **1시간 지난 `t…` 자원 청소** — Redis · PostgreSQL은 항상, RabbitMQ는 관리 API URL `FLEET_TEST_RABBITMQ_MGMT`가 있을 때만(AMQP로는 큐 목록을 못 얻는다) | 중간에 죽은 실행의 잔여물이 다음 실행을 오염시키지 않게. 실행 id에 생성 시각이 들어 있어 이름만으로 판정한다 |
-| 계약 테스트 | 추상 클래스 `XxxContract`(테스트 메서드 보유) ← `InMemoryXxxTests`(L1) · `RedisXxxTests`/`RabbitXxxTests`/`PgXxxTests`(L2) | fake와 실제가 같은 표를 통과해야 한다(09) |
-| 시계 | `TimeProvider` 주입(`FakeTimeProvider`) | 5초 고아 · 30초 만료 · 배치 창을 즉시 검증 |
+| 정리 | 시험 끝에 삭제 + **1시간 지난 `t…` 자원 청소** — Redis · PostgreSQL은 항상, RabbitMQ는 `FLEET_TEST_RABBITMQ_MGMT`가 있을 때만 | 중간에 죽은 실행의 잔여물이 다음 실행을 오염시키지 않게 |
+| 시험대 | `PipelineRig` — 실제 `IngestService` · `AssignmentCoordinator` · `PgEventStore` · Rabbit 발행 · 구독을 접두사 · 스키마로 조립. 송신 시험은 **실제 Kestrel**에 운영과 같은 `AddFleetIngest`로 IngestApi 엔드포인트를 띄운다 | 운영 조립과 같은 코드를 실제 서버에 붙인다 |
+| 계약 추상 클래스 | `tests/Infrastructure.Tests/Contracts/*Contract.cs` — 실제 구현(Redis · Rabbit · Pg) 실행 클래스만 있다 | 표를 한 곳에 두고 구현별로 돌린다 |
+| 장애 만들기 | 대역 대신 실제 수단: 워커 `KillAsync`(ack 없이 채널 닫기), `LOCK TABLE`(커밋 정지), Redis에 다른 인스턴스의 `pending` 키 선기록(503), 깨진 메시지 직접 발행(독 메시지), 21회 반환(전달 한도) | 실패 경로를 실제 브로커 · DB 의미론으로 본다 |
 
-### fake 6종과 실패 주입
-
-| fake | 계약 상대 | 실패 주입 |
-|---|---|---|
-| `InMemoryEventSink` | `EventCollector` 출력 검사용 | — |
-| `InMemoryIdemStore` | `RedisIdemStore` | 다음 N회 예외(=Redis 없음), 시계 이동 |
-| `InMemoryBroker` (`IEventPublisher` + `IPartitionSubscriber`) | `RabbitEventPublisher` · `RabbitPartitionSubscriber` | confirm nack · confirm 지연(타임아웃) · 큐 가득(`reject-publish`) · 소비자 강제 종료(미확인 반환 + 전달 횟수) · 중복 전달 · `x-delivery-limit` → DLQ |
-| `InMemoryEventStore` | `PgEventStore` | 다음 N회 일시 오류 · 커밋 직후 예외(커밋됐는데 실패로 보임) |
-| `InMemoryPartitionRoster` | `RedisPartitionRoster` | heartbeat 정지(만료) · Redis 끊김 |
-| `FakeIngestClient` | `HttpIngestClient` | 503 · 타임아웃 · 400 순서 지정 |
-
-> `InMemoryBroker`는 consistent-hash(키 해시 → 파티션), SAC(먼저 붙은 소비자만 활성, 취소 시 다음으로), prefetch,
-> `multiple` ack, 채널 닫기 반환을 **실제 의미론대로** 구현한다. 이 fake가 틀리면 L1 전체가 거짓 안심이 된다 — 그래서 `[핵심]`이다.
-
-### L1 단위 (인프라 없음, 항상)
+### 순수 로직 테스트 (인프라 없음, 항상)
 
 | ID | 대상 | 검증 |
 |---|---|---|
-| G-01 | 생성기 | 같은 시드 → 같은 작업 열. 출발 = 목적이면 재추첨 |
-| G-02 | 생성기 | λ=5, 10만 틱 평균이 λ의 ±3% |
-| G-03 | 할당기 | 최근접 Idle, 동점 `robotId` 순 |
-| G-04 | 생애주기 | `Idle → Moving → Loading → Moving → Unloading → Idle` 전이 · 사유 순서 |
-| G-05 | 생애주기 | 출발지에서 할당 → 같은 틱 `Idle → Moving → Loading` |
-| G-06 | 생애주기 | 경로 없음 → `Moving → Error(no_path)` + TaskFailed |
-| E-01 | 수집기 | 배치 안 순서(§1 표) — Created → 로봇별(Conflict → Status → Task) → telemetry |
-| E-02 | 수집기 | 대기 구간 1개 → ConflictDetected 1건, `waitMs` = 구간 길이 |
-| E-03 | 수집기 | 1000건 초과 → 두 배치, 순서 유지, 두 번째 `batchId` > 첫 번째 |
-| E-04 | 수집기 | 모든 RobotStatusChanged가 `StatusTransitions` 표 안 |
-| M-01 | 계약 | 03 예시 JSON 왕복 직렬화 바이트 동일 |
-| M-02 | 계약 | 라우팅 키 — 범주 · 이벤트별 표 전부 |
-| M-03 | 계약 | `eventId = {batchId}/{index}` |
-| M-04 | 계약 | `TopologySpec` 인자가 08 §8 표와 같음 |
-| I-01~I-07 | Ingest 멱등 | **08 §9 상태 전이 표 7행을 행마다 1개**: 신규 BEGIN · done 중복 202 · pending 5s 미만 503 · 고아 TAKEOVER · 전부 확인 → done · task 실패 → 내 pending만 삭제 → 503 · Redis 오류 → 건너뜀 → 202 |
-| I-08 | Ingest 멱등 | 고아 재점유 후 원래 인스턴스의 `Abort`는 남의 pending을 지우지 않는다 |
-| I-09 | 발행 | telemetry nack → 202, `telemetryDropped` 증가 |
-| I-10 | 발행 | telemetry 200ms 타임아웃 → 202 |
-| I-11 | 발행 | **task confirm nack → 503**, 키 삭제, 재전송 → 202 |
-| I-12 | 발행 | conflict confirm 2s 타임아웃 → 503 |
-| I-13 | 발행 | 채널 끊김 중간 → 503, 재전송 시 앞부분 중복은 eventId 동일 |
-| I-14 | 발행 | 큐 가득(`reject-publish`) → 503 |
-| I-15 | 발행 | 큐에 들어간 순서 = `events` 배열 순서(같은 라우팅 키 기준) |
-| I-16 | 검증 | 400 사유 표(버전 · UUIDv7 · 개수 · 모르는 타입 · 필수 필드) |
-| S-01 | 송신기 | 순차: 머리 배치 202 전에는 다음 배치를 보내지 않는다 |
-| S-02 | 송신기 | 503 · 타임아웃 재시도가 같은 바이트 · 같은 `batchId` |
-| S-03 | 송신기 | 백오프 100 → 200 → … → 2000 상한 |
-| S-04 | 송신기 | 버퍼 600 가득 → 틱 정지, 비면 재개, `stall` 메트릭 |
-| S-05 | 송신기 | 400 → 송신 정지 · 종료 코드 4 · 덤프 |
-| S-06 | 송신기 | 202 뒤에만 송신 로그, 종료 시 `unsent` 수 |
-| S-07 | 송신기 | 틱 루프 호출이 네트워크를 기다리지 않는다(느린 fake 클라이언트에서도 틱 시간 불변) |
-| W-01 | 처리기 | N=50 또는 T=50ms 창 |
-| W-02 | 처리기 | 커밋 후 마지막 tag `multiple` ack, 커밋 전 ack 없음 |
-| W-03 | 처리기 | **DB 일시 오류 → ack · nack 없이 같은 배치 재시도**, 전달 횟수 불변 |
-| W-04 | 처리기 | 커밋 직후 예외(커밋됨) → 재처리 시 중복 0 |
-| W-05 | 처리기 | **워커 kill(미확인 반환) → 다른 소비자 재처리 → 행 · 집계 1회** |
-| W-06 | 처리기 | 역직렬화 실패 1건 → 그 건만 DLQ, 나머지 정상 |
-| W-07 | 처리기 | 같은 메시지 21회 반환 → DLQ (`x-delivery-limit 20`) |
-| W-08 | 검증 | 금지 전이 → `robot_status_log.valid = false` 영수증 · `robot_state` 불변 · `fleet.invalid` 발행 · ack |
-| W-09 | 검증 | 중복 전달된 RobotStatusChanged는 오탐하지 않는다 |
-| W-10 | 집계 | telemetry 중복 → `metrics_minute` 1회 가산 |
-| W-11 | 집계 | TaskCompleted 중복 → `task_count` 1회 |
-| W-12 | 저장 | task_history 단조 — 낮은 상태 늦게 와도 무시 |
-| R-01 | 배정 | 2대 → `p % 2 == rank`, 3대 → `p % 3` |
-| R-02 | 배정 | 순위 = id 정렬 위치, heartbeat로 바뀌지 않음 |
-| R-03 | 배정 | **전환 순서: 새 몫 구독이 옛 몫 취소보다 먼저**, 어느 순간에도 파티션 활성 소비자 ≤ 1 |
-| R-04 | 배정 | 재배정 중 같은 로봇 이벤트 순서 유지(재배정 1회 포함 1만 건, invalid 0) |
-| R-05 | 배정 | 2회 연속 같은 결과일 때만 적용 |
-| R-06 | 배정 | 30초 heartbeat 없으면 제외 → 남은 워커가 몫 확장 |
-| R-07 | 배정 | Redis 미설정 → 48큐 전부 / 실행 중 끊김 → 몫 고정 |
-| P-01 | in-process | 로봇 20대 · 2000틱 → 차집합 0, invalid 0 |
-| P-02 | in-process | P-01 + 워커 kill 2회 + 브로커 nack 주입 → 차집합 0, 중복 반영 0 |
+| M-01~M-04 | 계약 | 03 예시 JSON 왕복 · 라우팅 키 표 · `eventId` · `TopologySpec` 인자(바인딩 49) |
+| I-16 | Ingest 검증 | 400 사유 표(버전 · UUIDv7 · 개수 · 모르는 타입 · 라우팅 필드 · tickMs · mapId · JSON) |
+| I-msg | Ingest 메시지 생성 | 배열 순서 · `eventId` · 라우팅 키 · 범주 · 지속성 · `tickMs` 복사 |
+| G-01~G-06 | 생성기 · 할당기 · 생애주기 | 시드 재현 · 포아송 평균 · 최근접 할당 · 전이 사유 순서 · 출발지 할당 · 경로 없음 |
+| E-01~E-04 | 수집기 | 배치 안 순서 · 대기 구간당 ConflictDetected 1건 · 1000건 분할 · 전이 표 안 (이벤트는 `FleetSimulation.CaptureEvents`로 받는다) |
+| S-04 | 송신기 | 버퍼 가득 → 틱 정지(송신 루프를 돌리지 않는다) |
+| S-log | 송신 로그 | 이벤트당 1행 형식 |
+| 기타 | TestRun · TestEnv · SendLogReader · ReconcileOptions · 상태 전이 표 · UUIDv7 · Hosts H-01~H-05 | |
 
-### L2 통합 (원격 서버, 접속 정보 있을 때)
+### 통합 테스트 (실제 서버, 접속 정보 있을 때)
 
-| ID | 대상 | 검증 |
+| ID | 서버 | 검증 |
 |---|---|---|
-| C-01 | `IIdemStore` 계약 | I-01~I-08을 Redis에서 (Lua 원자성 포함) |
-| C-02 | `IPartitionRoster` 계약 | R-01 · R-02 · R-06을 Redis에서 |
-| C-03 | `IEventStore` 계약 | W-10~W-12 · 중복 · RETURNING을 PostgreSQL에서 |
-| C-04 | `IEventPublisher` · `IPartitionSubscriber` 계약 | confirm · SAC 활성 전환 · `multiple` ack · 채널 닫기 반환 · 전달 횟수 증감 여부 |
-| T-01 | 토폴로지 | 선언 두 번 → 성공, 인자 다른 기존 큐 → 기동 실패 |
-| T-02 | 토폴로지 | consistent-hash: 같은 키 1000건 → 한 큐, 키 1만 개 → 16큐 모두 사용 |
-| T-03 | 토폴로지 | `reject-publish` → nack, `x-delivery-limit` 초과 · reject → `fleet.dlq` |
-| D-01 | 마이그레이션 | 빈 스키마 → 전부 적용, 재기동 → 아무것도 안 함, 체크섬 변경 → 실패 |
-| D-02 | 마이그레이션 | 두 프로세스 동시 기동 → 한 번만 적용 |
-| D-03 | 파티션 | 당일 · 익일 생성, 범위 밖 날짜 → DEFAULT, 메트릭 |
-| D-04 | 배치 INSERT | 1000행 `unnest` · `RETURNING`이 새 행만 |
+| C-01 | Redis | `IIdemStore` 계약 — 신규 · done · 5초 미만 BUSY · 5초 이상 TAKEOVER · 내 pending만 Abort · SET XX (Lua 원자성 포함) |
+| C-02 | Redis | `IPartitionRoster` 계약 — id 순 순위 · 30초 만료 · 탈퇴 |
+| C-03 | PostgreSQL | `IEventStore` 계약 — W-10 telemetry 중복 집계 1회 · W-11 TaskCompleted 1회 · W-12 단조 · 위반 영수증 · conflict 중복 |
+| C-04 | RabbitMQ | 같은 키 한 큐 순서 · prefetch · `multiple` ack · SAC 활성 전환과 채널 닫기 반환 · reject → DLQ · invalid 큐 발행 |
+| T-01~T-03 | RabbitMQ | 두 번 선언 성공 · 인자 다른 기존 큐 → 기동 실패(406) · 키 분산 · 21회 반환 → DLQ · 1000건 발행 순서 |
+| D-01~D-04 | PostgreSQL | 마이그레이션 · 동시 기동 · 파티션 · `unnest` RETURNING |
+| I-01 · I-02 | Rabbit · Redis | 신규 202 · done · 재전송 202 중복(큐 증가 없음) |
+| I-03 | Rabbit · Redis | 다른 인스턴스 pending → 503 `Retry-After: 1` |
+| I-07 | Rabbit | Redis 미설정 → 1단계 생략, 202 |
+| I-15 | Rabbit · Redis | 같은 로봇 이벤트가 배열 순서대로 큐에, `tickMs` 복사 |
+| W-02 | Rabbit · Pg | **ack는 커밋 뒤에만**: `LOCK TABLE`로 커밋을 멈춘 채 워커 kill → 3건 전부 반환 → 다음 워커가 적재 |
+| W-05 | Rabbit · Pg | 처리 중 kill → 재처리해도 행 1회 |
+| W-06 | Rabbit · Pg | 깨진 메시지 1건만 DLQ |
+| W-08 | Rabbit · Pg | 금지 전이 → `valid = false` 영수증 · `robot_state` 불변 · `fleet.invalid` 발행 |
+| W-09 | Rabbit · Pg | 같은 eventId 재전달 → 오탐 없음 |
+| R-01 · R-05 | 셋 다 | 실제 명부로 `p % N == rank`, 2회 연속일 때만 적용 |
+| R-04 | 셋 다 | 로봇 40대 × 140단계 상태 전이, 합류 · 탈퇴 재배정 → invalid 0 |
+| R-07 | Rabbit · Pg | 명부 없음 → 단일 워커가 16 파티션 전부 |
+| S-01 · S-02 · S-06 | 셋 다 | 실제 IngestApi가 503(다른 인스턴스 pending)을 주는 동안 다음 배치를 보내지 않고, 같은 batchId로 재전송, 송신 로그는 202 뒤에만 |
+| E2E | 셋 다 | Simulator(20대 · 600틱) → HTTP IngestApi → RabbitMQ → 워커(300틱에 kill → 교대) → PostgreSQL → Reconcile 질의: task · conflict · telemetry 누락 0, invalid 0, task_history 중복 0 |
 
-### L3 E2E (수동, 보고서 첨부)
+대역 없이는 만들 수 없어 **삭제한** 검증: I-06 · I-09~I-14(브로커 nack · 확인 타임아웃 · 채널 끊김 · reject-publish 주입), W-03 · W-04(저장 일시 오류 · 커밋 후 예외 주입), S-03 · S-05 · S-07(응답 각본 · 느린 응답). 코드 경로는 남아 있고, M8 장애 주입에서 실제 장애로 확인한다.
+
+### E2E (수동, 보고서 첨부)
 
 | ID | 시나리오 | 완료 기준 |
 |---|---|---|
@@ -607,22 +570,22 @@ WHERE s.category = 'telemetry'
 
 | 기준 | 코드 | 테스트 | 스크립트 · 도구 |
 |---|---|---|---|
-| 1 task · conflict 유실 0 | `IngestService` 확인 판정, `EventBatchSender`, `PartitionProcessor` | I-11~I-14, S-01~S-06, W-03~W-05, P-01 · P-02 | `src/Reconcile` + X-01 |
-| 2 중복 0 | `PgEventStore`(RETURNING 집계), `robot_status_log` | W-04 · W-05 · W-09~W-12, C-03 | 메트릭 `outcome="duplicate"` vs 행 수, X-01 |
-| 3 순서 유지 | `AssignmentCoordinator`, SAC 토폴로지, `StatusTransitions` 검증 | R-03 · R-04, W-08, C-04 | Reconcile `invalidTransitions`(`robot_status_log.valid = false`) · `fleet_invalid_depth`, X-02 |
-| 4 처리량 · 지연 | 배치 창 · `unnest` · 확인 몰아받기 | W-01, D-04 | `fleet_event_lag_seconds` · `fleet_queue_depth`, X-03 |
-| 5 틱 예산 | 버퍼 + 백그라운드 송신 | S-04 · S-07 | `fleet_tick_overrun_total`, X-04 |
-| 6 telemetry 유실 계측 | 범주별 확인 타임아웃 | I-09 · I-10 | `fleet_telemetry_dropped_total` + Reconcile telemetry 행 |
-| 7 테스트 | `IntegrationFact` · 계약 기반 클래스 · 실행 id 청소 | L1 전부 · L2 전부 | `dotnet test`(서버 없으면 L2 skip) |
+| 1 task · conflict 유실 0 | `IngestService` 확인 판정, `EventBatchSender`, `PartitionProcessor` | W-02 · W-05, S-01 · S-02 · S-06, E2E | `src/Reconcile` + X-01 |
+| 2 중복 0 | `PgEventStore`(RETURNING 집계), `robot_status_log` | C-03, W-05 · W-09, I-02, E2E | 메트릭 `outcome="duplicate"` vs 행 수, X-01 |
+| 3 순서 유지 | `AssignmentCoordinator`, SAC 토폴로지, `StatusTransitions` 검증 | R-04, W-08, C-04, I-15 | Reconcile `invalidTransitions` · `fleet_invalid_depth`, X-02 |
+| 4 처리량 · 지연 | 배치 창 · `unnest` · 확인 몰아받기 | D-04, T 발행 순서 | `fleet_event_lag_seconds` · `fleet_queue_depth`, X-03 |
+| 5 틱 예산 | 버퍼 + 백그라운드 송신 | S-04 | `fleet_tick_overrun_total`, X-04 |
+| 6 telemetry 유실 계측 | 범주별 확인 타임아웃 | E2E(telemetry 누락 수) | `fleet_telemetry_dropped_total` + Reconcile telemetry 행 |
+| 7 테스트 | `IntegrationFact` · 계약 추상 클래스 · 실행 id 청소 | 순수 로직 전부 · 통합 전부 | `dotnet test`(서버 없으면 통합 skip) |
 
 ### "처음 띄울 때" 경로 (09 승인 조건 5)
 
 | 순서 | 주체 | 동작 | 실패 시 |
 |---|---|---|---|
 | 1 | EventWorker | PostgreSQL 연결 → advisory lock → 마이그레이션 → 당일 · 익일 파티션 | 기동 실패 (재시작 정책이 재시도) |
-| 2 | EventWorker · IngestApi | RabbitMQ 연결 → 토폴로지 선언(exchange → 큐 → 바인딩) | 기동 실패 |
-| 3 | EventWorker | 명부 등록 → 몫 계산 → 소비 시작 → Ready | Redis 불통이면 48큐 전부(§7) |
-| 4 | IngestApi | Ready (Redis 연결은 백그라운드) | — |
+| 2 | EventWorker · IngestApi | RabbitMQ 연결 → 토폴로지 선언(exchange → 큐 → 바인딩) | EventWorker는 기동 실패, IngestApi는 2초마다 재시도하며 Not Ready |
+| 3 | EventWorker | 명부 등록 → 몫 계산 → 소비 시작 → Ready | Redis 미설정 · 불통이면 48큐 전부(§7) |
+| 4 | IngestApi | Ready (Redis 연결은 첫 사용 시) | — |
 | 5 | Simulator | `--ingest` 대상에 송신. Ingest가 아직 Not Ready면 503 · 연결 실패 → 재시도 | 버퍼가 차면 틱 정지 |
 
 > Ingest가 워커보다 먼저 떠도 안전하다. 토폴로지를 Ingest도 선언하므로 메시지는 큐에 쌓이고, 워커가 마이그레이션을 끝낸 뒤 소비한다.
@@ -952,7 +915,7 @@ public sealed class PartitionMaintainer(NpgsqlDataSource dataSource, TimeProvide
 
 [핵심]의 업무 로직은 호스트 없는 라이브러리 프로젝트에 있다(아래 "S3가 쓰는 [핵심] 타입"). 그 타입들은 **시그니처가 확정된 껍데기로 이미 커밋돼 있어** S3 혼자 컴파일된다. S3는 등록 · 호출 · HTTP 배선만 하고, 본문 구현(`NotImplementedException`)은 [핵심]이 병렬로 채운다.
 
-**만들 파일** (이 밖의 파일은 고치지 않는다. 특히 `src/Ingest.Core` · `src/EventWorker.Core` · `src/Infrastructure.*` · `src/Simulator/Fleet` · `src/Simulator/Events` · `src/PipelineHost`)
+**만들 파일** (이 밖의 파일은 고치지 않는다. 특히 `src/Ingest.Core` · `src/EventWorker.Core` · `src/Infrastructure.*` · `src/Simulator/Fleet` · `src/Simulator/Events`)
 
 | 파일 | 내용 |
 |---|---|
@@ -992,7 +955,7 @@ public static IServiceCollection AddWorkerCore(this IServiceCollection services,
 
 // src/Infrastructure.RabbitMq · Redis · Postgres
 public static IServiceCollection AddFleetRabbitMq(this IServiceCollection s, Action<RabbitMqOptions> c);  // ConnectionString 비면 예외. IStartupStep(토폴로지) 등록
-public static IServiceCollection AddFleetRedis(this IServiceCollection s, Action<RedisOptions> c);        // 비면 Bypass · 미구성 명부
+public static IServiceCollection AddFleetRedis(this IServiceCollection s, Action<RedisOptions> c);        // 비면 아무것도 등록하지 않는다
 public static IServiceCollection AddFleetPostgres(this IServiceCollection s, Action<PostgresOptions> c);  // 비면 예외. IStartupStep(마이그레이션 · 파티션) 등록
 // RabbitMqOptions { ConnectionString, TopologyPrefix }, RedisOptions { ConnectionString, KeyPrefix }, PostgresOptions { ConnectionString }
 // PartitionMaintainer { Task EnsureAsync(ct); Task<long> CountDefaultRowsAsync(ct); }
@@ -1091,7 +1054,7 @@ fleet 모드에서 `--start` · `--goal` · `--heading`은 무시(파싱은 기�
 | ID | 내용 |
 |---|---|
 | H-01 | `AddFleetSources` — 임시 폴더의 `appsettings.json`(빈 값) < `appsettings.Local.json` < 환경 변수(`ConnectionStrings__Postgres`) 우선순위, Local 파일 없으면 오류 없음, `GetConnection` 빈 문자열 → null |
-| H-02 | `AddFleetIngest` — RabbitMq 비면 `InvalidOperationException`, Redis 비면 `IIdemStore`가 `BypassIdemStore` |
+| H-02 | `AddFleetIngest` — RabbitMq 비면 `InvalidOperationException`, Redis 비면 `IIdemStore` · `IPartitionRoster` 미등록 |
 | H-03 | `AddFleetWorker` — `IEnumerable<IStartupStep>` 순서가 `postgres.migrations` → `rabbitmq.topology` (자리표시 연결 문자열 `Host=localhost;Database=x` · `amqp://localhost`로 컨테이너만 만들고 연결하지 않는다) |
 | H-04 | `HealthEndpoints.Ready` — 요구 구성 요소 하나라도 false면 503 + 스냅숏, 전부 true면 200 |
 | H-05 | `SimulationOptionsTests` — 새 옵션 6개 정상 · 오류 행, `--robots` 없으면 `Robots == null` |
@@ -1107,6 +1070,8 @@ fleet 모드에서 `--start` · `--goal` · `--heading`은 무시(파싱은 기�
 
 ### [단순 S4] 테스트 장치 · 단순 fake · Reconcile 껍데기
 
+> **D7로 fake 4종(`src/Infrastructure.InMemory`)은 삭제됐다.** 아래는 남은 TestSupport · Reconcile 명세다.
+
 **만들 파일**
 
 | 파일 | 내용 |
@@ -1114,8 +1079,6 @@ fleet 모드에서 `--start` · `--goal` · `--heading`은 무시(파싱은 기�
 | `tests/TestSupport/RobotFleet.TestSupport.csproj` | 클래스 라이브러리. xunit(`FactAttribute`용) · `StackExchange.Redis` · `Npgsql` · `Microsoft.Extensions.TimeProvider.Testing` · `Microsoft.Extensions.Configuration.Json` 8.0.1, Shared 참조 |
 | `tests/appsettings.Test.json` | `{ "FLEET_TEST_RABBITMQ": "", "FLEET_TEST_REDIS": "", "FLEET_TEST_PG": "", "FLEET_TEST_RABBITMQ_MGMT": "" }` — 키만. 실제 값 파일 `appsettings.Test.Local.json`은 만들지 않는다(사용자 몫) |
 | `tests/TestSupport/{IntegrationFactAttribute,TestEnv,TestRun,StaleResourceSweeper}.cs` | 아래 |
-| `src/Infrastructure.InMemory/RobotFleet.Infrastructure.InMemory.csproj` | Shared 참조만 |
-| `src/Infrastructure.InMemory/{InMemoryEventSink,InMemoryIdemStore,InMemoryPartitionRoster,FakeIngestClient}.cs` | 아래 |
 | `src/Reconcile/RobotFleet.Reconcile.csproj` | Exe. `Npgsql` · `Microsoft.Extensions.Configuration.Json` 8.0.1 · `Microsoft.Extensions.Configuration.EnvironmentVariables` 8.0.0, Shared 참조. `appsettings.json` 출력 복사, `appsettings.Local.json`은 있을 때만 복사 |
 | `src/Reconcile/appsettings.json` | `{ "ConnectionStrings": { "Postgres": "" } }` |
 | `src/Reconcile/{Program,ReconcileOptions,SendLogReader,SentEventImporter,ReconcileReport,IReconcileQueries,ReconcileRunner}.cs` | 아래 |
@@ -1164,38 +1127,6 @@ public static class StaleResourceSweeper
     public static Task<int> SweepPostgresAsync(NpgsqlDataSource pg, DateTimeOffset now, CancellationToken ct);         // 스키마 "t_t*"
     /// FLEET_TEST_RABBITMQ_MGMT(관리 API URL)가 있을 때만. 없으면 0 반환하고 아무것도 안 한다
     public static Task<int> SweepRabbitAsync(string? managementUrl, DateTimeOffset now, CancellationToken ct);
-}
-```
-
-```csharp
-namespace RobotFleet.Infrastructure.InMemory;
-
-public sealed class InMemoryEventSink(int capacity = 600) : IEventSink
-{
-    public IReadOnlyList<EventBatch> Batches { get; }
-    public void Drain();                       // 쌓인 배치를 비워 공간을 만든다(송신 완료 흉내)
-    public void Close();                       // 이후 WaitToWriteAsync = false
-}
-
-/// 08 §9 상태 전이 표 그대로. orphan 5000ms
-public sealed class InMemoryIdemStore(TimeProvider time) : IIdemStore
-{
-    public void FailNext(int count);           // 다음 count회 TryBegin = Bypass, Complete/Abort = 예외 무시
-    public string? ValueOf(string batchId);    // "pending:{ms}" | "done" | null — 테스트 관찰용
-}
-
-/// 만료 30s. RosterView는 살아 있는 id 오름차순
-public sealed class InMemoryPartitionRoster(TimeProvider time, bool configured = true) : IPartitionRoster
-{
-    public void Disconnect();                  // 이후 HeartbeatAsync = null
-    public void Reconnect();
-}
-
-public sealed class FakeIngestClient : IIngestClient
-{
-    public void Script(params IngestResult[] results);   // 순서대로 반환, 소진 후 Accepted
-    public TimeSpan Delay { get; set; }                  // 응답 지연(틱 루프 비차단 검증용)
-    public IReadOnlyList<(EventBatch Batch, byte[] Body)> Sent { get; }
 }
 ```
 
@@ -1249,7 +1180,6 @@ public sealed class ReconcileRunner(IReconcileQueries queries, TextWriter output
 |---|
 | 세 csproj와 `tests/Reconcile.Tests` 빌드 경고 0 (S1 시그니처 기준. S1 병합 전이면 중간 관리자가 병합 후 확인) |
 | K-01~K-04 통과 |
-| fake 4종이 위 시그니처 · 주석의 의미론을 따른다(계약 테스트는 [핵심]이 병합 후 붙인다) |
 | K-03 `tests/Reconcile.Tests/TestRunNameTests.cs` — `TestRun.New` 형식(`^t\d{14}[0-9a-f]{4}$`), `TryParseCreatedAt`이 접두사 붙은 이름(`t20261012093000ab12.fleet.task.p00`, `t_t20261012093000ab12`, `t20261012093000ab12:idem:x`)에서 시각 추출, `IsStale` 경계 |
 
 ### [핵심] 중간 관리자
@@ -1262,26 +1192,23 @@ public sealed class ReconcileRunner(IReconcileQueries queries, TextWriter output
 | `src/Ingest.Core` | `IngestService` · `IngestResponse` · `IngestStartupService` · 메트릭 · 등록 확장 |
 | `src/EventWorker.Core` | `WorkerService` · `AssignmentCoordinator` · `PartitionProcessor` · `EventHandlers` · 메트릭 · 등록 확장 |
 | `src/Infrastructure.RabbitMq` | `RabbitConnectionProvider` · `TopologyDeclarer` · `RabbitEventPublisher` · `RabbitPartitionSubscriber` · 등록 확장 |
-| `src/Infrastructure.Redis` | `RedisConnectionProvider` · `RedisIdemStore`(+ Lua) · `RedisPartitionRoster` · `BypassIdemStore` · 등록 확장 |
+| `src/Infrastructure.Redis` | `RedisConnectionProvider` · `RedisIdemStore`(+ Lua) · `RedisPartitionRoster` · 등록 확장(미설정이면 미등록) |
 | `src/Infrastructure.Postgres` | `PgEventStore` · `PostgresStartupStep` · `PostgresOptions` · 등록 확장 |
-| `src/Infrastructure.InMemory` | `InMemoryBroker` · `InMemoryEventStore` |
-| `src/PipelineHost` | in-process 조립 전부(§9). S3에서 옮김 — 조립 대상이 전부 [핵심] 타입이다 |
 | `src/Reconcile` | `ReconcileQueries.cs` |
 | `src/Shared` | `Pipeline/{IStartupStep,ReadinessState}.cs`, `TopologySpec`의 DLX → DLQ 바인딩(49개) |
-| `tests/Pipeline.Tests` (신규) | L1: I · W · R · P 시리즈, 계약 기반 클래스와 InMemory 쪽 |
-| `tests/Infrastructure.Tests` | L2: C · T · D-04 (Redis · RabbitMQ · Postgres 쪽) |
+| `tests/Pipeline.Tests` (신규) | 순수 로직: I-16 · 메시지 생성 · UUIDv7 |
+| `tests/Infrastructure.Tests` | 통합: C · T · D · I · W · R · S · E2E (§12), 계약 추상 클래스, `PipelineRig` |
 | `tests/Simulator.Tests` | G · E · S 시리즈 |
 
 - [ ] 생애주기 · 생성기 · 할당기 + G-01~G-06
 - [ ] 수집기 · 송신기 · 송신 로그 + E-01~E-04 · S-01~S-07
 - [ ] Ingest + Redis 멱등 Lua + I-01~I-16
 - [ ] RabbitMQ 선언 · 확인 추적 · 구독
-- [ ] InMemoryBroker · InMemoryEventStore (의미론 충실 fake)
 - [ ] 워커 처리기 · 핸들러 · 배정 · Redis 명부 + W-01~W-12 · R-01~R-07
 - [ ] PgEventStore + D-04
 - [ ] 계약 + C-01~C-04 · T-01~T-03
 - [ ] Reconcile 차집합 SQL
-- [ ] PipelineHost + P-01 · P-02, S3 병합 후 통합 확인, L3 X-01~X-04 보고서
+- [ ] 통합 테스트(§12), S3 병합 후 통합 확인, X-01~X-04 보고서(실제 서버 준비 후)
 
 ---
 
