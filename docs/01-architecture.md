@@ -129,6 +129,8 @@ POST /api/v1/move-requests/batch
   "mapId": "factory-a",
   "tick": 142057,
   "epoch": "e-7f3a",                       // Redis 상태 세대 (→ "Redis 상태 소실 복구")
+  "prev": { "tick": 142056, "digest": "3be1…" },   // 마지막으로 적용한 판정 (→ 08 해시 체인)
+  "releases": [ { "robotId": "R-020", "x": 7, "y": 3 } ],   // 직전 틱 이후 이동 완료로 비운 칸
   "requests": [
     {
       "robotId": "R-012",
@@ -145,8 +147,9 @@ POST /api/v1/move-requests/batch
 200
 {
   "tick": 142057,
+  "digest": "a07c…",                       // 다음 요청의 prev.digest
   "decisions": [
-    { "robotId": "R-012", "granted": true,  "lockToken": "R-012:142057:9f1c" },
+    { "robotId": "R-012", "granted": true,  "lockToken": "R-012:142057" },
     { "robotId": "R-034", "granted": false, "reason": "occupied", "blockedBy": "R-012",
       "suggestedAction": "wait" },
     { "robotId": "R-007", "granted": false, "reason": "deadlock",  "suggestedAction": "yield",
@@ -155,11 +158,14 @@ POST /api/v1/move-requests/batch
   ]
 }
 
-409 { "error": "state_lost", "epoch": null }   // Redis 비어 있음 → 복구 절차 진입
+409 { "error": "state_lost", "cause": "missing" }   // missing · epoch · chain · conflict · from_mismatch → 복구 절차 진입
+409 { "error": "batch_mismatch" }                   // 같은 tick에 다른 본문 → Simulator는 state_lost와 같이 처리
+503 { "error": "unavailable" }                      // Redis 오류 → Simulator가 다른 인스턴스로 재전송
 ```
 
-요청 1건에 그 틱에 움직이려는 로봇 전부가 들어간다(상한 1000). 단건 `POST /api/v1/move-request`는
-디버깅용으로만 남기고 Simulator는 쓰지 않는다.
+요청 1건에 그 틱에 움직이려는 로봇 전부가 들어간다(상한 1000). 이동 요청이 없어도 매 틱 보낸다(해제 전달 · 체인 연속).
+`ReleaseAsync`는 즉시 호출하지 않고 다음 배치의 `releases`로 모은다. 재전송 정책과 응답 처리는 08 §4 · §5.
+단건 `POST /api/v1/move-request`는 디버깅용으로만 남기고 Simulator는 쓰지 않는다.
 
 #### 배치 내 판정 순서
 
@@ -168,25 +174,26 @@ Redis에 가서 경쟁시키지 않고 **메모리에서 먼저 정렬·판정�
 
 | 단계 | 내용 |
 |---|---|
+| 0 | 읽기 Lua 1회로 체인 검사 + 요청 로봇의 칸 · 대기 그래프 · 교착 해소 상태를 읽는다. 재요청이면 기록을 반환하고 끝 (08 §2) |
 | 1 | 요청을 04의 우선순위 점수로 **내림차순 정렬**. 동점이면 `robotId` 오름차순 (결정적) |
 | 2 | 정렬 순서대로 순차 판정. 배치 내 선행 로봇이 이미 차지한 `to` 칸은 점유로 취급 |
 | 3 | 교차 판정: `A.to == B.from && B.to == A.from`이면 후순위 로봇 거부 (`reason: swap`) |
-| 4 | 메모리 통과분만 Redis Lua 스크립트 1회로 일괄 락 획득 (아래 "셀 점유 락") |
-| 5 | Lua에서 실패한 로봇(다른 pod·이전 틱 잔여 락)은 `occupied`로 응답 |
-| 6 | 거부된 로봇의 대기 관계를 `wait:{robotId}`에 기록하고 교착 탐지 실행 (04) |
+| 4 | 읽어 온 칸 점유와 대조. 남이 점유한 칸은 `occupied` |
+| 5 | 거부된 로봇의 대기 관계를 갱신하고 교착 탐지 실행 (04) |
+| 6 | 락 · 해제 · 대기 그래프 · 교착 해소 · 판정 기록을 커밋 Lua 1회로 원자 반영, `WAIT 1` 파이프라인 (08 §4) |
 
 > 2칸 선점(04)이라 맞바꿈 쌍은 선순위 로봇도 상대의 현재 칸에 막혀 `occupied`가 된다.
 > 후순위가 `swap`으로 응답되도록 구현은 로봇마다 3단계(교차)를 2단계(점유)보다 먼저 검사한다.
-> 거부 응답의 `blockedBy`는 막고 있는 로봇이며, 6단계 대기 관계의 입력이다.
+> 거부 응답의 `blockedBy`는 막고 있는 로봇이며, 5단계 대기 관계의 입력이다.
 
 > **왜 메모리에서 먼저 판정하는가** — 배치 안의 충돌은 전부 같은 pod가 보고 있으므로
-> Redis 왕복 없이 결정할 수 있다. Redis 왕복은 배치당 1회(Lua)로 고정되어
-> 로봇 수가 늘어도 판정 지연이 선형으로 늘지 않는다. 정렬이 결정적이어야
-> 같은 입력을 재전송했을 때 같은 결과가 나온다(멱등).
+> Redis 왕복 없이 결정할 수 있다. Redis 왕복은 배치당 2회(읽기 · 커밋)로 고정되어
+> 로봇 수가 늘어도 판정 지연이 선형으로 늘지 않는다. 교착 해소까지 판정 기록에 넣어
+> 락과 같은 원자 단위로 커밋하려면 읽기와 커밋을 나눠야 한다(08 C4).
 
-한 틱의 배치는 하나의 pod가 통째로 처리한다. 로드밸런서가 틱마다 다른 pod로 보내도
+한 틱의 배치는 하나의 pod가 통째로 처리한다. Simulator가 틱마다 다른 pod로 보내도
 상태는 전부 Redis에 있으므로 문제없다. 응답 유실로 같은 `(mapId, tick)`이 재전송되면
-기록된 판정을 그대로 돌려준다(07 "재전송 멱등").
+기록된 판정을 그대로 돌려준다(08 §4 "재전송 멱등 Lua 규약").
 
 ---
 
@@ -345,7 +352,7 @@ fleet.telemetry (x-consistent-hash)
 | conflict | yes | yes | 분석 자료 |
 
 `task`·`conflict` 큐는 M3부터 **quorum queue** 타입으로 선언하고(멤버 1), M5에서 멤버 3으로 확장한다.
-큐 타입은 선언 후 바꿀 수 없다. `telemetry`는 classic 비복제로 남긴다. → 07
+큐 타입은 선언 후 바꿀 수 없다. `telemetry`는 classic 비복제로 남긴다. → 07, 큐 인자 · 상한 · DLQ는 08 §8
 
 ---
 
@@ -354,20 +361,11 @@ fleet.telemetry (x-consistent-hash)
 ### 키 구조
 
 ```
-# 상태 세대 (FLUSHDB 감지용)
-fleet:epoch:{mapId}              → epochId          TTL 없음
+# 맵 판정 상태 (M4~) — 판정 안전에 필요한 것 전부. 필드 정의는 08 "맵 상태 단일 해시"
+fleet:map:{mapId}                → Hash {epoch, wm, wd, rh, rec, c:{x}:{y}, r:{robotId}, wg, dl, yl, ...}   TTL 30s (커밋마다 갱신)
 
-# 셀 점유 락 (TTL 필수) — 값에 틱을 함께 기록
-cell:lock:{mapId}:{x}:{y}        → "{robotId}:{tick}:{token}"   TTL = 실시간 환산값 (아래)
-
-# 로봇 현재 상태
+# 로봇 현재 상태 (조회용 캐시. 판정에 쓰지 않는다)
 robot:state:{robotId}            → Hash {x, y, heading, status, taskId, battery, tick}
-
-# 대기 그래프 (교착 탐지)
-wait:{mapId}:{robotId}           → "{blockedByRobotId}:{tick}"   TTL 5s
-
-# 교착 해소 락 (04 참조)
-deadlock:resolve:{mapId}:{cycleKey}  → "{resolverPod}:{tick}:{yieldRobotId}"   TTL 50틱
 
 # 시공간 예약 (예약 방식 사용 시)
 reserve:{mapId}:{x}:{y}:{tick}   → robotId          TTL 5s
@@ -386,82 +384,33 @@ metrics:robot:{robotId}:today    → Hash {moveMs, waitMs, idleMs, taskCount}
 metrics:heatmap:{mapId}          → Hash {"x:y" → count}
 ```
 
-### 락 만료 — 논리 시간과 실시간을 둘 다 쓴다
+기존 `fleet:epoch:{mapId}`, `cell:lock:*`, `wait:*`, `deadlock:resolve:*`, `robot:yielding:*`는 맵 해시의 필드로 들어간다.
 
-로봇이 셀을 잠근 채 프로세스가 죽으면 **그 칸은 영원히 통행 불가**가 된다.
-맵 중앙 통로에서 이런 일이 생기면 공장 전체가 멈춘다. 그래서 TTL이 필수인데,
-"실시간 2초 고정"은 배속과 어긋난다. 배속 10이면 실시간 2초는 틱 200회분이라
-죽은 로봇의 칸이 논리 시간으로 20초나 막히고, 배속 0.1이면 틱 2회 만에 산 로봇의 락이 날아간다.
+### 칸 점유 — 맵 단일 해시, 칸별 만료 없음
 
-| 기준 | 값 | 역할 |
-|---|---|---|
-| **논리 만료** | `lockTtlTicks = 20` | **정상 판정 기준.** 락 값의 `tick`이 `현재 tick − 20`보다 오래되면 만료로 간주하고 덮어쓴다 |
-| **실시간 TTL** | `clamp(20 × tickMs ÷ speedFactor, 1s, 30s)` | **안전망.** Simulator 자체가 죽어 틱이 멈추면 논리 만료는 영원히 안 오므로, 실시간으로도 반드시 풀린다 |
+| 결정 | 근거 |
+|---|---|
+| 칸 점유는 맵 해시의 `c:{x}:{y}` 필드 | 락 · 해제 · 판정 기록 · 워터마크를 커밋 Lua 하나로 원자 반영한다 (08 §4) |
+| **칸별 논리 만료(20틱) · 실시간 TTL 폐지** | 이동 요청을 보내지 않는 정지 로봇(Idle · Loading)의 칸이 20틱 뒤 만료되어 다른 로봇이 승인받는 결함이 있었다. 틱 정지가 실시간 TTL보다 길면 칸 락이 일부만 사라지는 구멍도 생긴다 |
+| 해제는 명시적으로만 — 다음 배치의 `releases` | 해제도 같은 원자 커밋 안에서, 커밋 Lua가 기대값을 검사한 뒤 지운다. 토큰 검증이 필요 없다 |
+| 맵 키 전체에 TTL 30초 | 버려진 맵 정리용. 단일 키라 통째로만 사라지므로 구멍이 없고, 사라지면 `409 missing` → 재주장 |
 
-```
-speedFactor 1   → TTL 2s     (틱 20회 = 2초)
-speedFactor 10  → TTL 1s     (계산값 0.2s → 하한 1s로 보정)
-speedFactor 0.5 → TTL 4s
-```
+> 2칸 선점(04)은 그대로다. 이동 승인 시 목표 칸을 추가로 점유하고, 이동 완료 해제로 이전 칸을 비운다.
 
-- Simulator가 `speedFactor`를 배치 요청의 설정으로 전달하고, FleetController는 그 값으로 TTL을 계산
-- 정상 이동 완료 시 즉시 해제, 매 틱 승인 시 `tick`·TTL 갱신(연장)
-- 실시간 TTL 하한 1초: 배속이 높을 때 네트워크 지연 한 번에 산 로봇의 락이 사라지는 것을 막는다
+### Redis 상태 소실 복구 (FLUSHDB · 재시작 · 장애 조치)
 
-> **논리 만료가 주, 실시간이 보조인 이유** — 충돌 판정은 전부 틱 세계에서 일어난다.
-> "20틱 동안 갱신이 없으면 죽은 것"이 배속과 무관하게 참이다. 실시간 TTL은
-> 틱 자체가 멈춘 상황(Simulator 다운)만 책임지므로 넉넉하게 잡아도 된다.
-
-### 일괄 락 획득 (Lua)
-
-배치 판정 4단계에서 호출한다. 키마다 "비어 있음 / 내 것 / 논리 만료"면 획득, 아니면 실패.
-
-```lua
--- KEYS: cell:lock 키들, ARGV[1]=robotId 목록(JSON), ARGV[2]=tick, ARGV[3]=lockTtlTicks, ARGV[4]=ttlMs
-local results = {}
-for i, key in ipairs(KEYS) do
-    local v = redis.call("GET", key)
-    local ok = (v == false)
-    if not ok then
-        local owner, t = v:match("^([^:]+):(%d+):")
-        ok = (owner == robotIds[i]) or (tonumber(t) + lockTtlTicks < tick)
-    end
-    if ok then
-        redis.call("SET", key, robotIds[i] .. ":" .. tick .. ":" .. token, "PX", ttlMs)
-    end
-    results[i] = ok and 1 or 0
-end
-return results
-```
-
-### 해제 시 토큰 검증
-
-```lua
--- 내가 건 락만 해제한다
-if redis.call("GET", KEYS[1]) == ARGV[1] then
-    return redis.call("DEL", KEYS[1])
-else
-    return 0
-end
-```
-
-TTL 만료 후 다른 로봇이 그 칸을 잠갔는데, 늦게 도착한 해제 요청이
-남의 락을 풀어 버리는 사고를 막는다.
-
-### Redis 상태 소실 복구 (FLUSHDB · 재시작)
-
-Redis가 비면 락·로봇 상태·대기 그래프가 전부 사라진다. 그 상태로 이동 판정을 계속하면
-**모든 칸이 비어 보여** 로봇이 서로 겹친다. 진실은 Simulator가 들고 있으므로 Simulator가 재주장한다.
+Redis가 비거나 장애 조치로 최근 틱이 빠지면 그 상태로 이동 판정을 계속할 때
+**비어 보이는 칸**에 로봇이 겹친다. 진실은 Simulator가 들고 있으므로 Simulator가 재주장한다.
 
 | 단계 | 주체 | 동작 |
 |---|---|---|
-| 1 | FleetController | 배치 요청마다 `fleet:epoch:{mapId}`를 읽는다. **없거나 요청의 `epoch`와 다르면** 판정하지 않고 `409 state_lost` |
+| 1 | FleetController | 배치 요청마다 맵 해시의 `epoch`와 체인 꼬리(`wm`, `wd`)를 읽는다. **키가 없거나, `epoch`가 다르거나, 꼬리가 요청의 `prev`와 다르면** 판정하지 않고 `409 state_lost` (08 "해시 체인 워터마크") |
 | 2 | Simulator | 틱 진행을 멈춘다(로봇 전원 그 자리에 정지, `tick`은 증가하지 않음). 복구 중 틱은 `fleet_recovery_ticks_total`로 집계 |
-| 3 | Simulator | `POST /api/v1/recovery/reclaim` — 모든 로봇의 `{robotId, position, nextCell?, heading, status, taskId}` 와 새 `epoch` 전송 |
-| 4 | FleetController | 로봇 현재 칸과 (이동 중이면) 다음 칸의 락을 **현재 tick으로 전부 재설정**, `robot:state` 복원, `fleet:epoch` 기록 |
-| 5 | Simulator | 응답을 받으면 새 `epoch`로 틱 재개. 대기 그래프는 비어 있지만 다음 틱의 거부에서 자연히 다시 쌓인다 |
+| 3 | Simulator | `POST /api/v1/recovery/reclaim` — 모든 로봇의 `{robotId, position, nextCell?, heading, status, taskId}`, 새 `epoch`, 마지막으로 적용한 `tick` 전송 |
+| 4 | FleetController | 맵 해시를 지우고 로봇 현재 칸과 (이동 중이면) 다음 칸을 전부 재설정, 체인 뿌리 기록. `robot:state` 복원 |
+| 5 | Simulator | 응답의 `digest`를 `prev`로 삼아 새 `epoch`로 틱 재개. 대기 그래프는 비어 있지만 다음 틱의 거부에서 자연히 다시 쌓인다 |
 
-- `fleet:epoch`는 Simulator가 기동할 때도 한 번 등록한다. **Simulator 재시작 = 새 세대**
+- Simulator는 기동할 때도 재주장으로 시작한다. **Simulator 재시작 = 새 세대**
 - 멱등 키도 함께 사라지므로 10분 창 안의 재전송은 Ingest를 통과한다 → 워커 2차 방어가 막는다 (아래)
 - 재주장 API는 멱등이다. 같은 `epoch`로 두 번 와도 결과가 같다
 
@@ -570,17 +519,24 @@ Simulator의 재전송이 "이미 처리됨"으로 버려진다. 유실이다. �
 1. SET idem:{batchId} "pending:{nowMs}" NX EX 600
    ├─ 성공               → 2로
    ├─ 실패, 값 == "done" → 202 (중복. 큐에 넣지 않음)
-   └─ 실패, 값 == "pending:{t}"
-        ├─ now − t < 5s   → 503 Retry-After: 1   (다른 인스턴스가 발행 중)
-        └─ now − t ≥ 5s   → 고아 pending. Lua로 값을 "pending:{nowMs}"로 갈아끼운 뒤 2로
-2. 항목을 큐로 발행 (publisher confirm 대기)
-   ├─ 전부 성공 → SET idem:{batchId} "done" XX EX 600 → 202
-   └─ 하나라도 실패 → Lua로 "내가 쓴 pending일 때만" DEL → 503
+   ├─ 실패, 값 == "pending:{t}"
+   │    ├─ now − t < 5s   → 503 Retry-After: 1   (다른 인스턴스가 발행 중)
+   │    └─ now − t ≥ 5s   → 고아 pending. Lua로 값을 "pending:{nowMs}"로 갈아끼운 뒤 2로
+   └─ Redis 오류         → 1단계를 건너뛰고 2로 (fail-open, fleet_ingest_idem_bypass_total)
+2. 항목을 큐로 발행 (publisher confirm 대기 — task · conflict 2초, telemetry 200ms)
+   ├─ task · conflict 전부 성공 → SET idem:{batchId} "done" XX EX 600 → 202
+   │    (telemetry 실패분은 버리고 fleet_telemetry_dropped_total만 올린다)
+   └─ task · conflict 하나라도 실패 → Lua로 "내가 쓴 pending일 때만" DEL → 503
       (Simulator가 같은 batchId로 재전송)
 ```
 
+상태 전이 전체 표와 책임 분담은 08 §9.
+
 | 결정 | 근거 |
 |---|---|
+| **telemetry 발행 실패는 배치 실패가 아니다** | 노드 다운으로 telemetry 파티션이 비면 task 이벤트까지 503에 묶인다(07). telemetry는 유실 허용 |
+| Redis 오류 시 1단계 생략 | `idem:*`은 유실 허용이고 중복은 워커가 막는다. Redis 장애 조치 동안 파이프라인을 세우지 않는다 |
+| Simulator 이벤트 송신은 **배치 하나씩 순서대로** | T가 503이고 T+1이 먼저 들어가면 같은 로봇의 이벤트 순서가 파티션에서 뒤바뀐다. 202를 받아야 다음 배치 |
 | 발행 실패 시 키 삭제 | 재전송이 다시 1단계부터 통과해야 한다 |
 | 그래도 `pending`이 남을 수 있음 (DEL 전에 Ingest가 죽음) | 5초 지난 pending은 고아로 보고 재점유. 5초는 발행 타임아웃(2초)의 2배 이상 |
 | 부분 발행 후 재전송 → 일부 항목이 **두 번** 큐에 들어감 | 피할 수 없다. 워커 2차 방어가 항목 단위로 막는다 |
@@ -615,9 +571,9 @@ ack 전 메시지 재전달. 세 경우 모두 **같은 `eventId`가 두 번 온
 
 | 구간 | 방식 | 이유 |
 |---|---|---|
-| Simulator → FleetController | HTTP 동기, **틱당 배치 1건** | 즉답 필요 (이동 승인). 건별 호출은 틱 예산 초과 |
-| FleetController ↔ Redis | TCP, 배치당 Lua 1회 | 저지연 상태 조회 |
-| Simulator → IngestApi | HTTP 배치, 틱당 1건 | 그 틱의 모든 이벤트를 묶어 전송. 유일한 이벤트 발행 경로 |
+| Simulator → FleetController | HTTP 동기, **틱당 배치 1건**. headless Service, 틱마다 교대, 실패 시 다른 인스턴스로 재전송 | 즉답 필요 (이동 승인). 건별 호출은 틱 예산 초과 (08 §5) |
+| FleetController ↔ Redis | TCP, Sentinel 경유. 배치당 읽기 Lua 1회 + 커밋 Lua 1회(+`WAIT 1`) | 저지연 상태 조회, 판정 기록 원자화 (08 §2) |
+| Simulator → IngestApi | HTTP 배치, 틱당 1건, 순차 송신 | 그 틱의 모든 이벤트를 묶어 전송. 유일한 이벤트 발행 경로 |
 | IngestApi → RabbitMQ | AMQP | 비동기 분리 |
 | RabbitMQ → EventWorker | AMQP | 파티션별 순서 보장 |
 | QueryApi → 관제 화면 | WebSocket | 실시간 위치 푸시 |
