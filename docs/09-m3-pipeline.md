@@ -1,6 +1,6 @@
 # 09. M3 — 이벤트 파이프라인 분리 (큰 틀)
 
-완료 기준(README): **이벤트가 DB에 적재되고 유실 0.** 이 문서는 범위·경계·증명 방법·테스트 전략을 정하고, 상세 설계는 10에서 중간 관리자가 채운다.
+완료 기준(README): **이벤트가 DB에 적재되고 유실 0.** 이 문서는 범위·경계·증명 방법·테스트 전략을 정하고, 상세 설계는 10이 채웠다. 10이 09를 바꾼 곳(D1~D6)은 리뷰를 거쳐 수용했고, 이 문서는 그 결과에 맞춰져 있다.
 08 "구현 작업 분할 M3"의 HA 항목(BatchPublisher · IdemStore · EventBatchSender · Topology · 멱등 테스트)은 그대로 M3에 속한다.
 
 ---
@@ -35,19 +35,19 @@
 ## 서비스 경계
 
 ```
-Simulator ──IEventSink──► HttpBatchSender ──HTTP──► IngestApi ──IEventPublisher──► RabbitMQ
-                                                        │ IIdemStore (Redis · fail-open)
-RabbitMQ ──► EventWorker ──IEventStore──► PostgreSQL
-                 │ IPartitionRoster (Redis 명부)
+Simulator ──IEventSink──► EventBatchSender ──HTTP──► IngestApi ──IEventPublisher──► RabbitMQ
+                                                         │ IIdemStore (Redis · fail-open)
+RabbitMQ ──IPartitionSubscriber──► EventWorker ──IEventStore──► PostgreSQL
+                                        │ IPartitionRoster (Redis 명부)
 ```
 
 | 경계 | 원칙 |
 |---|---|
 | `src/Shared/Messaging` | 봉투 · 이벤트 DTO · 라우팅 키 규칙 · 토폴로지 선언. **직렬화 가능한 것만**(06 원칙). 5개 서비스가 참조 |
 | `src/IngestApi` | 01 그대로: 검증 · 멱등 · 발행 · 즉시 응답. DB를 모른다 |
-| `src/EventWorker` | 큐만 소비. HTTP 없음. 핸들러는 이벤트 종류별 순수 함수 + 저장소 인터페이스 |
+| `src/EventWorker` | 큐만 소비. 업무 HTTP 없음(관리 포트의 `/metrics` · `/health`만). 핸들러는 이벤트 종류별 순수 함수 + 저장소 인터페이스 |
 | `src/Simulator/Events` | 틱 안의 발생 순서로 번호 매김(03), 틱당 배치 1건, 순차 송신 · 재전송 · 버퍼(08 §9). **발행이 틱 예산을 침범하지 않는다** — 송신은 틱 루프 밖 백그라운드, 버퍼 가득 차면 틱 정지 |
-| 인프라 접점은 전부 인터페이스 뒤 | `IEventSink` · `IEventPublisher` · `IIdemStore` · `IEventStore` · `IPartitionRoster`. 각각 **인메모리 구현을 먼저** 만들고 실제 구현을 붙인다 (테스트 전략의 전제) |
+| 인프라 접점은 전부 인터페이스 뒤 | `IEventSink` · `IEventPublisher` · `IPartitionSubscriber` · `IIdemStore` · `IEventStore` · `IPartitionRoster`. 각각 **인메모리 구현을 먼저** 만들고 실제 구현을 붙인다 (테스트 전략의 전제) |
 
 ---
 
@@ -55,7 +55,7 @@ RabbitMQ ──► EventWorker ──IEventStore──► PostgreSQL
 
 | # | 기준 | 측정 | 합격 |
 |---|---|---|---|
-| 1 | **task · conflict 유실 0** | Simulator가 송신한 `eventId` 집합(송신 로그 파일) − PostgreSQL 적재 집합(`task_history` 전이 · `conflict_log.event_id`) | 차집합 **0**. 정상 실행 + 워커 프로세스 강제 종료 2회 + Ingest 재시작 1회를 섞은 30분 실행에서 |
+| 1 | **task · conflict 유실 0** | Simulator가 송신한 `eventId` 집합(송신 로그 파일) − PostgreSQL 적재 집합(이벤트 영수증 `task_event_log` · `robot_status_log` · `conflict_log.event_id`) | 차집합 **0**. 정상 실행 + 워커 프로세스 강제 종료 2회 + Ingest 재시작 1회를 섞은 30분 실행에서 |
 | 2 | **중복 0** | 유니크 제약 위반 시도 수(메트릭) vs 반영 행 수 | 위반 시도는 있어도 되고, 집계 · 행 반영은 1회 |
 | 3 | **순서 유지** | `fleet.invalid` 큐 적체 · 상태 전이 검증 실패 메트릭 | 워커 2대 + 재배정 1회 포함 실행에서 **0건** |
 | 4 | 처리량 | 로봇 200대 · 10Hz(telemetry 초당 2000건) | 큐 적체가 수렴하고 발생 → 적재 지연 p99 ≤ 5초 (01 "허용 지연 수 초") |
@@ -64,7 +64,8 @@ RabbitMQ ──► EventWorker ──IEventStore──► PostgreSQL
 | 7 | 테스트 | 단위 테스트는 인프라 없이 전부 통과. 통합 테스트는 원격 서버 접속 정보가 있을 때 전부 통과 | 아래 |
 
 > 유실 0은 "안 잃어버린 것 같다"가 아니라 **송신 집합과 적재 집합의 차집합**으로 증명한다.
-> 송신 로그는 Simulator가 배치마다 `{batchId, tick, eventId, eventType}`를 파일로 남기는 것으로 충분하다. M8 §12의 대조 방식과 같은 도구를 쓴다.
+> 송신 로그는 Simulator가 202를 받은 배치마다 이벤트당 1행을 파일로 남긴다. `task_history`는 최종 상태만 남아 "어느 이벤트가 들어왔는가"를
+> 답하지 못하므로 이벤트당 1행의 영수증 테이블을 둔다(10 D6). 대조 도구는 `src/Reconcile`(콘솔)이며 M8 §12와 공용이다.
 
 ---
 
@@ -96,9 +97,12 @@ RabbitMQ ──► EventWorker ──IEventStore──► PostgreSQL
 | 결정 | 내용 | 근거 |
 |---|---|---|
 | 최소 작업 생성기 포함 | 03의 포아송 생성 · Station 무작위 출발/목적 · `Idle → Moving → Loading → Moving → Unloading → Idle` 생애주기 | task 이벤트 없이는 M3 완료 기준 1을 증명할 수 없다 |
-| 스키마는 SQL 파일 + 기동 시 적용 | `db/migrations/NNN_*.sql`, EventWorker 기동 시 순서대로 적용(적용 이력 테이블). ORM 마이그레이션 금지 | 01 스키마가 이미 SQL이고 파티션 DDL은 ORM이 못 다룬다 |
-| 파티션 사전 생성 | EventWorker가 당일 + 익일 파티션을 기동 시와 자정에 만든다 | 파티션 없는 날짜의 INSERT는 실패 = 유실 |
-| 메시징 라이브러리 | README 스택(MassTransit) 유지가 기본. 01 토폴로지(consistent-hash · SAC · 파티션 재배정 · 처리 순서 ack · quorum 인자)를 MassTransit로 구현할 수 없거나 우회가 과하면 `RabbitMQ.Client` 직접 사용으로 전환하고 README를 고친다 | 토폴로지가 라이브러리보다 우선이다 |
+| 스키마는 SQL 파일 + 기동 시 적용 | `db/migrations/NNN_*.sql`, EventWorker 기동 시 advisory lock 안에서 순서대로 적용(이력 · 체크섬). ORM 마이그레이션 금지 | 01 스키마가 이미 SQL이고 파티션 DDL은 ORM이 못 다룬다 |
+| 파티션 사전 생성 | EventWorker가 당일 + 익일(UTC) 파티션을 기동 시와 **매시** 만들고, DEFAULT 파티션을 둔다 | 파티션 없는 날짜의 INSERT는 실패 = 유실. 자정 타이머 하나는 재시작 중이면 놓친다 (10 D3) |
+| 메시징 라이브러리 | **`RabbitMQ.Client` 직접 사용.** README 스택 표 수정 | 01 토폴로지 7항목 중 처리 완료 순서 ack와 "DB 일시 오류 시 nack 없는 재시도"를 MassTransit이 못 맞추고, `_error` 큐 재발행이 08 §8의 `x-delivery-limit` · DLX를 무력화한다 (10 §3 비교표). 토폴로지가 라이브러리보다 우선 |
+| 집계 멱등은 원본 INSERT의 `RETURNING` | 같은 트랜잭션에서 `ON CONFLICT DO NOTHING RETURNING`으로 **새로 들어간 행만** 집계. Redis `metrics_applied` 집합 폐지 | M3의 Redis는 선택이고, 집합과 집계를 한 트랜잭션에 묶는 쪽이 정확하다 (10 D4) |
+| `tickMs`는 봉투에 싣는다 | 배치 봉투에 `tickMs`, Ingest가 항목 봉투로 복사. 워커 설정 `Fleet:TickMs` 폐지 | 워커 설정과 Simulator `--tick`을 사람이 맞추는 구조는 틀어지면 시간 분해가 조용히 왜곡된다. 03 공통 봉투에 필드 하나 추가 |
+| 대조 도구 경로 `src/Reconcile` | `tools/`는 GIF 생성 도구용으로 저장소에서 제외됐다 | 완료 기준 증명 도구는 저장소에 있어야 한다. Simulator와 같은 콘솔 프로젝트 자리 |
 | 명부 기반 파티션 배정은 M3 | 워커 2대 로컬 실행으로 재배정 순서(새 몫 구독 → 옛 몫 취소)와 순서 유지를 검증 | HPA 시연은 M5지만 정확성은 M3에서 |
 | 워커는 파티션 단위 배치 | 파티션별로 N건 또는 T ms 창으로 모아 INSERT, 처리 완료 순서대로 ack | 01 "개별 INSERT 금지" + 순서 유지 |
 | 서비스마다 `/metrics` · `/health/live` · `/health/ready` | 08 메트릭 표의 Ingest · 송신기 항목 + 워커 처리 · 적체 · invalid · DLQ 카운터 | 완료 기준 2~6의 출처 |
@@ -106,6 +110,8 @@ RabbitMQ ──► EventWorker ──IEventStore──► PostgreSQL
 ---
 
 ## 상세 설계 위임 항목 (→ 10)
+
+10이 채웠다. 항목 번호는 10의 절 번호와 거의 같다(1 → §1 … 13 → §13, 14 → §14).
 
 | # | 항목 | 제약 · 원칙 |
 |---|---|---|
@@ -118,7 +124,7 @@ RabbitMQ ──► EventWorker ──IEventStore──► PostgreSQL
 | 7 | 명부 기반 파티션 배정 | 01 "워커 수가 변할 때" 그대로. Redis 없으면 단일 워커 · 전 파티션 |
 | 8 | PostgreSQL — 스키마 · 마이그레이션 · 파티션 · 배치 INSERT 방식 | 01 테이블 · 유니크 키 그대로. `unnest` 배열 INSERT 권장(파라미터 수 제한 회피). 커넥션 풀 크기 근거 |
 | 9 | 실행 구성 — in-process 모드(인프라 없음) · 원격 인프라 모드 · (M5) k3s | 셋 다 같은 조립 코드. 설정으로만 갈라진다. 접속 정보는 환경 변수 |
-| 10 | 유실 0 대조 도구 | 송신 로그 형식 + 대조 SQL/스크립트. M8 §12와 공용 |
+| 10 | 유실 0 대조 도구 (`src/Reconcile`) | 송신 로그 형식 + 대조 SQL. 적체 0 확인 뒤 실행. M8 §12와 공용 |
 | 11 | 메트릭 · 헬스 | 08 메트릭 표 + 워커 항목. readiness는 02 규칙(큐 · DB 연결) — FleetController의 예외(08 §5)는 M4 |
 | 12 | 테스트 목록 (06 스타일) · fake 설계 · 실패 주입 지점 · 환경 변수 skip 방식 · 자원 격리(실행 id) | L1 · L2 · L3 구분과 계약 테스트 명시 |
 | 13 | 작업 분할 — `[핵심]` / `[단순 S1~S4]` | 08 분할표 형식. 묶음끼리 파일이 겹치지 않게 |
