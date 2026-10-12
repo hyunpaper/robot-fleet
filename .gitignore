@@ -54,6 +54,7 @@ logs/
 appsettings.Development.json
 appsettings.Local.json
 appsettings.*.local.json
+appsettings.Test.Local.json
 secrets.json
 *.secret.yaml
 *.secret.yml

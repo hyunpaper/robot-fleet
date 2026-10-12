@@ -768,7 +768,7 @@ FleetController 배치 처리 중 kill은 시점을 고정해야 재현된다. �
 - [ ] [단순 S1] `src/FleetController.Api/Contracts/*.cs`, `src/FleetController.Api/Program.cs`, `Endpoints/*.cs` — 배치 · 재주장 · 경로 DTO(`prev`, `releases`, `digest`, 409 `cause`), 엔드포인트 배선, readiness(Redis 미포함)
 - [ ] [단순 S2] `src/FleetController/Arbitration/Redis/{MapFieldCodec,RequestHasher,RedisOptions,RedisConnectionFactory}.cs` — 필드 인코딩, 정규화 해시, Sentinel 접속 설정(§7 표)
 - [ ] [단순 S3] `src/FleetController.Api/Paths/{PathBatchEndpoint,LocalPathCache}.cs`, `src/Simulator/Remote/{HttpPathPlanner,EndpointSelector}.cs` — 경로 엔드포인트 · LRU, headless DNS 갱신 · 교대 선택
-- [ ] [단순 S4] `deploy/compose/docker-compose.ha.yml`, `deploy/compose/redis/*.conf`, `src/FleetController/Diagnostics/FaultInjection.cs` — Redis 1+2 · Sentinel 3 · FleetController 2 로컬 구성(§1 설정 값), 장애 주입 훅
+- [ ] [단순 S4] `src/FleetController/Diagnostics/FaultInjection.cs` — 장애 주입 훅. 검증용 Redis 1+2 · Sentinel 3은 사용자 제공 서버(요구사항: Redis 7.2, §1 설정 값 적용, Sentinel 접속 정보는 appsettings)
 - [ ] [핵심] `RobotStepper` — 빈 배치도 매 틱 전송, 계획 단계를 경로 배치 호출로
 
 ### M5 — k3s 배포 (cp-1 + worker 3)

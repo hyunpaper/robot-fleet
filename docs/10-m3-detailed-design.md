@@ -380,7 +380,38 @@ RETURNING robot_id, status, occurred_at;
 | `ConnectionStrings:Postgres` | Npgsql 연결 문자열 | EventWorker 기동 실패 |
 | `Fleet:Topology:Prefix` | 이름 접두사 | 빈 값 |
 
-환경 변수는 .NET 규칙(`ConnectionStrings__RabbitMq`). **저장소에는 키 이름만 있고 값은 없다.** `appsettings*.json`에도 연결 문자열을 넣지 않는다.
+### 인프라 서버 — 사용자 제공
+
+RabbitMQ · Redis · PostgreSQL은 사용자가 준비하고, 저장소는 **요구사항과 접속 설정 키만** 갖는다. 서버 구성 파일은 두지 않는다.
+
+| 서버 | 요구사항 | 근거 |
+|---|---|---|
+| RabbitMQ | **3.13 이상**, 플러그인 `rabbitmq_consistent_hash_exchange` 활성, quorum queue 사용 가능. 관리 플러그인은 선택(있으면 잔여 자원 청소 · 적체 확인) | 01 파티션 exchange · 08 §8 |
+| RabbitMQ 권한 | 사용할 vhost에 configure · write · read (exchange · 큐 선언 · 삭제) | 기동 시 토폴로지 선언(§3), 테스트 접두사 자원 생성 · 삭제(§12) |
+| RabbitMQ 권장 설정 | `vm_memory_high_watermark.relative = 0.6`, `raft.wal_max_size_bytes = 64000000`, `disk_free_limit.absolute = 2GB` | 08 §8. 단일 노드에도 해당하는 것만 |
+| Redis | **7.2** (단일 노드로 충분). 비밀번호 사용 시 연결 문자열에 | Lua shebang 플래그 · 멱등 키 · 명부. 없어도 동작(fail-open) |
+| PostgreSQL | **16** | 선언형 파티션 · `unnest` |
+| PostgreSQL 권한 | 대상 DB에 테이블 · 함수 생성(마이그레이션), 테스트용으로 `CREATE SCHEMA` | §8 · §12 스키마 격리 |
+
+### 접속 정보 — appsettings 파일
+
+접속 정보는 사용자가 **`appsettings.Local.json`에 직접 넣는다.** 저장소에는 키 이름만 있다.
+
+| 순서 (뒤가 이김) | 출처 | 커밋 | 내용 |
+|---|---|---|---|
+| 1 | `appsettings.json` | ○ | `ConnectionStrings`의 세 키를 **빈 문자열**로. 그 밖의 기본값 |
+| 2 | `appsettings.{Environment}.json` | `Development`는 ✗(`.gitignore`) | 선택 |
+| 3 | `appsettings.Local.json` | **✗** (`.gitignore`) | **실제 접속 정보.** 없으면 건너뜀(optional) |
+| 4 | 환경 변수 `ConnectionStrings__RabbitMq` 등 | — | k3s(M5) Secret · CI 덮어쓰기 경로 |
+| 5 | 명령행 | — | |
+
+| 결정 | 근거 |
+|---|---|
+| 대상 호스트: IngestApi · EventWorker · PipelineHost · Reconcile. Simulator는 접속 정보가 없고(`--ingest` URL만) 같은 순서로 `Fleet:*` 키만 읽는다 | 모든 진입점이 같은 규칙 |
+| `appsettings.Local.json`을 추가한 **뒤 환경 변수 · 명령행을 다시 추가**한다 | `WebApplication.CreateBuilder`는 이미 환경 변수를 넣어 두므로, 그 뒤에 JSON을 붙이면 JSON이 환경 변수를 이긴다. k3s Secret이 무시되는 사고를 막는다 |
+| 빈 문자열 = 설정 없음 (`string.IsNullOrWhiteSpace`) | 커밋된 `appsettings.json`의 빈 값이 "설정됨"으로 읽히지 않게. Redis 빈 값 → fail-open(§4 · §7) |
+| `appsettings.Local.json`은 있을 때만 출력 폴더로 복사(csproj `Condition="Exists(...)"`) | `dotnet run` · 빌드 산출물 실행 어느 쪽이든 같은 파일을 읽는다 |
+| 로그에 연결 문자열을 찍지 않는다. 호스트 · 포트만 | 로그가 저장소 밖으로 나간다 |
 
 Simulator 명령행 추가: `--robots N` · `--lambda λ` · `--seed n` · `--ingest <url>` · `--sendlog <dir>` · `--metrics-port p`. `--ingest`가 없으면 이벤트를 만들지 않는다(M1 동작 유지).
 
@@ -466,8 +497,10 @@ WHERE s.category = 'telemetry'
 
 | 장치 | 결정 | 근거 |
 |---|---|---|
-| L2 skip | `[IntegrationFact("FLEET_TEST_RABBITMQ")]` — 생성자에서 환경 변수가 비면 `Skip = "FLEET_TEST_RABBITMQ 없음"`. `[Trait("Category","Integration")]` | 추가 패키지 없이 xUnit 2.9에서 **skip으로 표시**된다(실패 아님) |
-| 환경 변수 | `FLEET_TEST_RABBITMQ`(AMQP URI) · `FLEET_TEST_REDIS` · `FLEET_TEST_PG` | 09. 값은 저장소 밖(사용자 셸 · CI 비밀) |
+| L2 skip | `[IntegrationFact("FLEET_TEST_RABBITMQ")]` — 인자는 **설정 이름**. `TestEnv.Get(이름)`이 비면 `Skip = "FLEET_TEST_RABBITMQ 없음"`. `[Trait("Category","Integration")]` | 추가 테스트 패키지 없이 xUnit 2.9에서 **skip으로 표시**된다(실패 아님) |
+| 설정 이름 | `FLEET_TEST_RABBITMQ`(AMQP URI) · `FLEET_TEST_REDIS` · `FLEET_TEST_PG` · `FLEET_TEST_RABBITMQ_MGMT`(관리 API URL, 선택) | 09 |
+| 값 출처 (앞이 이김) | ① 같은 이름의 환경 변수 ② `tests/appsettings.Test.Local.json`(**gitignore, 사용자가 실제 값**) ③ `tests/appsettings.Test.json`(커밋, 네 키 모두 빈 문자열). 빈 문자열 = 없음 | 사용자는 파일에 넣고, CI는 환경 변수로 넣는다. 키 이름이 환경 변수 이름과 같아 매핑 표가 없다 — 테스트 코드는 출처를 모른다 |
+| 파일 찾기 | `AppContext.BaseDirectory`에서 위로 올라가 `RobotFleet.sln`이 있는 폴더를 찾고 그 아래 `tests/` | 테스트 프로젝트마다 파일을 복사하지 않는다. 어느 테스트 프로젝트든 같은 파일 |
 | 실행 id | `t{yyyyMMddHHmmss}{4자리 난수}` | 공용 서버를 여러 실행이 나눠 쓴다 |
 | 격리 | RabbitMQ: 토폴로지 접두사 `{runId}.` / Redis: 키 접두사 `{runId}:` / PostgreSQL: 스키마 `t_{runId}` + `search_path` | vhost 생성은 관리자 권한이 필요하다. 접두사는 일반 권한으로 된다 |
 | 정리 | 테스트 클래스 `IAsyncLifetime.DisposeAsync`에서 삭제. 시작 시 **1시간 지난 `t…` 자원 청소** — Redis · PostgreSQL은 항상, RabbitMQ는 관리 API URL `FLEET_TEST_RABBITMQ_MGMT`가 있을 때만(AMQP로는 큐 목록을 못 얻는다) | 중간에 죽은 실행의 잔여물이 다음 실행을 오염시키지 않게. 실행 id에 생성 시각이 들어 있어 이름만으로 판정한다 |
@@ -822,7 +855,7 @@ public static class StatusTransitions
 | M-04: `Build("")` → exchange 4 · 큐 50 · 바인딩 48, 위 인자 표와 일치, `Build("t1.")` → 모든 이름 접두사 |
 | 전이: 03 표의 허용 칸 전부 `true`, 금지 예시 5개 `false` |
 
-### [단순 S2] DB · 서버 구성
+### [단순 S2] DB
 
 **만들 파일**
 
@@ -836,7 +869,6 @@ public static class StatusTransitions
 | `src/Infrastructure.Postgres/Migrations/PartitionMaintainer.cs` | 아래 |
 | `tests/Infrastructure.Tests/RobotFleet.Infrastructure.Tests.csproj` | Postgres · TestSupport(S4) 참조 |
 | `tests/Infrastructure.Tests/Postgres/{MigrationTests,PartitionTests}.cs` | D-01~D-03 (L2) |
-| `deploy/compose/infra/docker-compose.yml`, `rabbitmq/enabled_plugins`, `rabbitmq/rabbitmq.conf`, `.env.example` | 통합 테스트 서버 |
 
 ```sql
 -- 002_logs_and_state.sql
@@ -907,17 +939,6 @@ public sealed class PartitionMaintainer(NpgsqlDataSource dataSource, TimeProvide
 
 `schema_migrations(version text PRIMARY KEY, checksum text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())`는 Migrator가 첫 실행 때 만든다. 스키마는 연결 문자열의 `search_path`를 따른다(테스트 격리).
 
-docker-compose:
-
-| 서비스 | 이미지 | 설정 |
-|---|---|---|
-| rabbitmq | `rabbitmq:3.13-management` | 포트 5672 · 15672. `enabled_plugins`: `[rabbitmq_management,rabbitmq_prometheus,rabbitmq_consistent_hash_exchange].` `rabbitmq.conf`: `vm_memory_high_watermark.relative = 0.6`, `disk_free_limit.absolute = 2GB`, `raft.wal_max_size_bytes = 64000000`. 사용자 · 비밀번호 · vhost는 `.env`의 `RABBITMQ_DEFAULT_USER` · `RABBITMQ_DEFAULT_PASS` · `RABBITMQ_DEFAULT_VHOST` |
-| redis | `redis:7.2` | 포트 6379. `--appendonly yes --appendfsync everysec --requirepass ${REDIS_PASSWORD}` |
-| postgres | `postgres:16` | 포트 5432. `POSTGRES_USER` · `POSTGRES_PASSWORD` · `POSTGRES_DB`는 `.env` |
-| 공통 | | 이름 있는 볼륨, `restart: unless-stopped`, healthcheck |
-
-`.env.example`은 키만 두고 값은 `change-me`. `.env`는 이미 `.gitignore`에 있다.
-
 **완료 조건**
 
 | 조건 |
@@ -926,7 +947,6 @@ docker-compose:
 | `dotnet build tests/Infrastructure.Tests` — S4 병합 후 확인(1차 단독으로는 Postgres 프로젝트까지) |
 | D-01~D-03이 `[IntegrationFact("FLEET_TEST_PG")]` + `[Trait("Category","Integration")]`로 작성되고, 각 테스트가 `TestRun.PgSchema` 스키마를 만들고 지운다 |
 | SQL 3개가 빈 데이터베이스에 이름 순으로 적용 가능(사람이 원격 서버에서 1회 확인 — 중간 관리자) |
-| compose 파일에 비밀번호 · 주소 리터럴 없음 |
 
 ### [단순 S3] 호스트 조립 (2차)
 
@@ -935,6 +955,7 @@ docker-compose:
 
 - [ ] 프로젝트 생성: `IngestApi` · `EventWorker` · `PipelineHost` · `Infrastructure.RabbitMq` · `Infrastructure.Redis`, 테스트 `IngestApi.Tests` · `EventWorker.Tests`. 참조 관계 · 패키지(표)
 - [ ] `AddFleetIngest` · `AddFleetWorker` · `AddFleetSimulatorEvents` 조립(설정 → 구현 선택, §9 표)
+- [ ] 호스트마다 §9 "접속 정보" 순서로 구성: `appsettings.json`(세 키 빈 문자열, 커밋) + `appsettings.Local.json` optional 로드 후 환경 변수 · 명령행 재추가, `appsettings.Local.json`은 있을 때만 출력 복사
 - [ ] 엔드포인트 배선, `/metrics` · `/health/*`(§11 readiness), 워커 관리 포트
 - [ ] Simulator 명령행 옵션(§9) · 사용법 문자열 · `SimulationOptionsTests` 추가 행
 
@@ -946,28 +967,40 @@ docker-compose:
 
 | 파일 | 내용 |
 |---|---|
-| `tests/TestSupport/RobotFleet.TestSupport.csproj` | 클래스 라이브러리. xunit(`FactAttribute`용) · `StackExchange.Redis` · `Npgsql` · `Microsoft.Extensions.TimeProvider.Testing`, Shared 참조 |
+| `tests/TestSupport/RobotFleet.TestSupport.csproj` | 클래스 라이브러리. xunit(`FactAttribute`용) · `StackExchange.Redis` · `Npgsql` · `Microsoft.Extensions.TimeProvider.Testing` · `Microsoft.Extensions.Configuration.Json` 8.0.1, Shared 참조 |
+| `tests/appsettings.Test.json` | `{ "FLEET_TEST_RABBITMQ": "", "FLEET_TEST_REDIS": "", "FLEET_TEST_PG": "", "FLEET_TEST_RABBITMQ_MGMT": "" }` — 키만. 실제 값 파일 `appsettings.Test.Local.json`은 만들지 않는다(사용자 몫) |
 | `tests/TestSupport/{IntegrationFactAttribute,TestEnv,TestRun,StaleResourceSweeper}.cs` | 아래 |
 | `src/Infrastructure.InMemory/RobotFleet.Infrastructure.InMemory.csproj` | Shared 참조만 |
 | `src/Infrastructure.InMemory/{InMemoryEventSink,InMemoryIdemStore,InMemoryPartitionRoster,FakeIngestClient}.cs` | 아래 |
-| `src/Reconcile/RobotFleet.Reconcile.csproj` | Exe. `Npgsql`, Shared 참조 |
+| `src/Reconcile/RobotFleet.Reconcile.csproj` | Exe. `Npgsql` · `Microsoft.Extensions.Configuration.Json` 8.0.1 · `Microsoft.Extensions.Configuration.EnvironmentVariables` 8.0.0, Shared 참조. `appsettings.json` 출력 복사, `appsettings.Local.json`은 있을 때만 복사 |
+| `src/Reconcile/appsettings.json` | `{ "ConnectionStrings": { "Postgres": "" } }` |
 | `src/Reconcile/{Program,ReconcileOptions,SendLogReader,SentEventImporter,ReconcileReport,IReconcileQueries,ReconcileRunner}.cs` | 아래 |
 | `src/Reconcile/ReconcileQueries.cs` | **자리표시만**: `IReconcileQueries` 구현, 모든 메서드 `throw new NotImplementedException()`. 본문은 2차 [핵심]이 채운다 |
-| `tests/Reconcile.Tests/RobotFleet.Reconcile.Tests.csproj`, `SendLogReaderTests.cs`, `ReconcileOptionsTests.cs`, `TestRunNameTests.cs` | K-01~K-03. Reconcile · TestSupport 참조 |
+| `tests/Reconcile.Tests/RobotFleet.Reconcile.Tests.csproj`, `SendLogReaderTests.cs`, `ReconcileOptionsTests.cs`, `TestRunNameTests.cs`, `TestEnvTests.cs` | K-01~K-04. Reconcile · TestSupport 참조 |
 
 ```csharp
 namespace RobotFleet.TestSupport;
 
-/// 지정한 환경 변수 중 하나라도 비어 있으면 Skip = "{이름} 없음". 클래스에는 [Trait("Category","Integration")]를 따로 단다
-public sealed class IntegrationFactAttribute : FactAttribute { public IntegrationFactAttribute(params string[] envVars); }
-public sealed class IntegrationTheoryAttribute : TheoryAttribute { public IntegrationTheoryAttribute(params string[] envVars); }
+/// 지정한 설정 이름 중 하나라도 TestEnv.Get이 null이면
+/// Skip = "{이름} 없음 (환경 변수 또는 tests/appsettings.Test.Local.json)". 클래스에는 [Trait("Category","Integration")]를 따로 단다
+public sealed class IntegrationFactAttribute : FactAttribute { public IntegrationFactAttribute(params string[] settingNames); }
+public sealed class IntegrationTheoryAttribute : TheoryAttribute { public IntegrationTheoryAttribute(params string[] settingNames); }
 
 public static class TestEnv
 {
     public const string RabbitMqVar = "FLEET_TEST_RABBITMQ", RedisVar = "FLEET_TEST_REDIS",
                         PgVar = "FLEET_TEST_PG", RabbitMgmtVar = "FLEET_TEST_RABBITMQ_MGMT";
-    public static string? RabbitMq { get; }  public static string? Redis { get; }
-    public static string? Pg { get; }        public static string? RabbitMgmt { get; }
+
+    /// 환경 변수 > tests/appsettings.Test.Local.json > tests/appsettings.Test.json. 빈 문자열 · 공백은 null.
+    /// 파일은 프로세스당 한 번 읽어 캐시한다
+    public static string? Get(string name);
+    public static string? RabbitMq => Get(RabbitMqVar);   public static string? Redis => Get(RedisVar);
+    public static string? Pg => Get(PgVar);               public static string? RabbitMgmt => Get(RabbitMgmtVar);
+    /// RobotFleet.sln이 있는 폴더 아래 tests/. 못 찾으면 null(파일 출처 없이 환경 변수만)
+    public static string? TestsDirectory { get; }
+
+    /// 테스트용 순수 함수: 위 우선순위를 주입된 출처로 계산
+    internal static string? Resolve(string name, Func<string, string?> environment, string? testsDirectory);
 }
 
 public sealed class TestRun
@@ -1025,7 +1058,8 @@ public sealed class FakeIngestClient : IIngestClient
 ```csharp
 namespace RobotFleet.Reconcile;
 
-/// --sendlog <파일|디렉터리> --map <mapId> [--out <json>] [--drain-seconds 10]. 연결 문자열은 ConnectionStrings__Postgres 환경 변수
+/// --sendlog <파일|디렉터리> --map <mapId> [--out <json>] [--drain-seconds 10].
+/// 연결 문자열은 ConnectionStrings:Postgres — appsettings.json → appsettings.Local.json → 환경 변수(§9 순서)
 public sealed record ReconcileOptions(string SendLogPath, string MapId, string? OutPath, int DrainSeconds)
 { public static ReconcileOptions Parse(string[] args); }   // 잘못된 인자 → ArgumentException
 
@@ -1057,19 +1091,20 @@ public sealed class ReconcileRunner(IReconcileQueries queries, TextWriter output
 }
 ```
 
-`Program`은 `ReconcileOptions.Parse` → `ConnectionStrings__Postgres` 확인(없으면 오류 메시지 · 종료 코드 2) → `new ReconcileRunner(new ReconcileQueries(), Console.Out).RunAsync(...)`.
+`Program`은 `ReconcileOptions.Parse` → 구성 읽기(§9 순서: `appsettings.json` → `appsettings.Local.json`(optional) → 환경 변수) → `ConnectionStrings:Postgres`가 비면 "appsettings.Local.json 또는 ConnectionStrings__Postgres 필요" 메시지 · 종료 코드 2 → `new ReconcileRunner(new ReconcileQueries(), Console.Out).RunAsync(...)`.
 
 | ID | 테스트 |
 |---|---|
 | K-01 | `SendLogReader` — §5 행 형식 3줄 파일 → 3개, 빈 줄 무시, 깨진 JSON 줄 → 줄 번호 포함 예외 |
 | K-02 | `ReconcileOptions.Parse` — 필수 누락 · 모르는 옵션 · 기본값 |
+| K-04 | `TestEnv.Resolve` — 환경 변수가 Local 파일을 이김, Local이 Test.json을 이김, 빈 문자열 → null, 폴더 없음 → 환경 변수만, Local 파일 없음 → 오류 없이 Test.json (임시 폴더에 파일을 만들어 검증) |
 
 **완료 조건**
 
 | 조건 |
 |---|
 | 세 csproj와 `tests/Reconcile.Tests` 빌드 경고 0 (S1 시그니처 기준. S1 병합 전이면 중간 관리자가 병합 후 확인) |
-| K-01~K-03 통과 |
+| K-01~K-04 통과 |
 | fake 4종이 위 시그니처 · 주석의 의미론을 따른다(계약 테스트는 [핵심]이 병합 후 붙인다) |
 | K-03 `tests/Reconcile.Tests/TestRunNameTests.cs` — `TestRun.New` 형식(`^t\d{14}[0-9a-f]{4}$`), `TryParseCreatedAt`이 접두사 붙은 이름(`t20261012093000ab12.fleet.task.p00`, `t_t20261012093000ab12`, `t20261012093000ab12:idem:x`)에서 시각 추출, `IsStale` 경계 |
 
