@@ -54,6 +54,7 @@ Console.CancelKeyPress += (_, e) =>
 
 ITickDelay delay = options.SpeedFactor > 0 ? new RealTimeDelay() : new NoDelay();
 var renderer = new ConsoleRenderer(Console.Out, map, options.TickMs, options.RenderEveryTicks);
-var loop = new SimulationLoop(map, robot, task, new AStarPathPlanner(), new AlwaysGrantMoveArbiter(),
-                              options, delay, renderer);
+var arbiter = new InMemoryMoveArbiter();
+arbiter.Register(map.MapId, robot.RobotId, robot.Position);
+var loop = new SimulationLoop(map, robot, task, new AStarPathPlanner(), arbiter, options, delay, renderer);
 return await loop.RunAsync(cts.Token);

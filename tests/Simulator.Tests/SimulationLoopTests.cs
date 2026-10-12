@@ -185,8 +185,8 @@ public class SimulationLoopTests
         arbiter.Decisions.Should().ContainSingle().Which.Tick.Should().Be(4);
     }
 
-    [Fact] // T-10
-    public async Task Denied_RobotWaits_UntilMaxTicks()
+    [Fact] // T-10 — Waiting은 매 틱 재요청하고, 대기 시간을 우선순위 입력으로 싣는다
+    public async Task Denied_RobotWaits_RetryingEveryTick_UntilMaxTicks()
     {
         var arbiter = new RecordingArbiter(grant: false);
         var sim = Create(TestMaps.Open(5, 5), new(0, 0), Heading.East, new(3, 0), o => o with { MaxTicks = 20 }, arbiter);
@@ -198,6 +198,31 @@ public class SimulationLoopTests
         (await sim.Loop.RunAsync()).Should().Be(3);
         sim.Robot.Status.Should().Be(RobotStatus.Waiting);
         sim.Robot.Position.Should().Be(new Point(0, 0));
+        arbiter.Decisions.Select(r => r.Tick).Should().Equal(Enumerable.Range(1, 20).Select(t => (long)t));
+        arbiter.Decisions.Select(r => r.WaitMs).Should().Equal(Enumerable.Range(0, 20).Select(i => i * 100));
+    }
+
+    [Fact] // T-10 보강 — 길이 열리면 Waiting → Moving, 대기 시간은 0으로
+    public async Task Waiting_ResumesWhenGranted()
+    {
+        var arbiter = new RecordingArbiter(grant: false);
+        var writer = new StringWriter();
+        var map = TestMaps.Open(5, 5);
+        var sim = Create(map, new(0, 0), Heading.East, new(2, 0), arbiter: arbiter, renderer: new ConsoleRenderer(writer, map, 100, 0));
+
+        await sim.StepAsync(3);
+        arbiter.Grant = true;
+        await sim.StepAsync(1);                                   // tick 4: 승인
+        sim.Robot.Status.Should().Be(RobotStatus.Moving);
+        await sim.StepAsync(9);                                   // tick 13
+        sim.Robot.Position.Should().Be(new Point(1, 0));
+        await sim.StepAsync(1);                                   // tick 14: 다음 칸
+        arbiter.Decisions.Select(r => r.WaitMs).Should().Equal(0, 100, 200, 300, 0);
+
+        var lines = writer.ToString().TrimEnd().Split(Environment.NewLine);
+        lines.Where(l => l.Contains(" WAIT ", StringComparison.Ordinal)).Should().Equal(
+            "[t=000001 0.1s] R-001 WAIT    (0,0)   reason=Occupied");
+        lines.Should().Contain("[t=000004 0.4s] R-001 MOVE    (0,0) → (1,0)");
     }
 
     [Fact] // T-11 — 전체 시나리오의 이벤트 로그
@@ -269,8 +294,24 @@ public class SimulationLoopTests
         lines[^1].Should().Be("[t=000427 42.7s] R-001 ARRIVED (6,3)   ticks=427 moves=42 turns=2 overrun=0");
     }
 
+    [Fact] // T-13 — 메모리 점유 판정으로도 단일 로봇 결과는 같다
+    public async Task FactoryA_DefaultScenario_WithInMemoryArbiter()
+    {
+        var map = MapLoader.LoadFromFile(Path.Combine(AppContext.BaseDirectory, "maps", "factory-a.json"));
+        var arbiter = new InMemoryMoveArbiter();
+        arbiter.Register(map.MapId, "R-001", new(0, 39));
+        var sim = Create(map, new(0, 39), Heading.North, new(6, 3), arbiter: arbiter);
+
+        (await sim.Loop.RunAsync()).Should().Be(0);
+        sim.Loop.Stats.Tick.Should().Be(427);
+        arbiter.OccupantOf(map.MapId, new(6, 3)).Should().Be("R-001");
+        arbiter.OccupantOf(map.MapId, new(0, 39)).Should().BeNull();
+    }
+
     private sealed class RecordingArbiter(bool grant, int sleepMs = 0) : IMoveArbiter
     {
+        public bool Grant { get; set; } = grant;
+
         public List<MoveRequest> Decisions { get; } = new();
         public List<Point> Released { get; } = new();
 
@@ -280,7 +321,7 @@ public class SimulationLoopTests
             if (sleepMs > 0) Thread.Sleep(sleepMs);
             Decisions.AddRange(requests);
             IReadOnlyList<MoveDecision> result = requests
-                .Select(r => grant ? MoveDecision.Grant(r.RobotId) : new MoveDecision(r.RobotId, false, MoveDenyReason.Occupied))
+                .Select(r => Grant ? MoveDecision.Grant(r.RobotId) : new MoveDecision(r.RobotId, false, MoveDenyReason.Occupied))
                 .ToArray();
             return ValueTask.FromResult(result);
         }

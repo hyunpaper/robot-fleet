@@ -9,7 +9,7 @@ namespace RobotFleet.Simulator;
 
 /// <summary>
 /// 로봇의 틱 진행(계획 → 시작 → 진행). 06 "틱 처리 순서"를 그대로 따른다.
-/// M2에서 루프가 요청을 모아 DecideAsync를 1회 부르도록 BuildMoveRequest / ApplyAsync로 나눠 둔다.
+/// StepAllAsync가 여러 로봇의 요청을 모아 DecideAsync를 1회 부르고, 그 앞뒤가 BuildMoveRequest / ApplyAsync다.
 /// </summary>
 public sealed class RobotStepper
 {
@@ -44,14 +44,31 @@ public sealed class RobotStepper
     /// <summary>진행 중인 동작. 없으면 null.</summary>
     public RobotAction? CurrentAction(Robot robot) => StateOf(robot).Action;
 
-    /// <summary>한 틱 전체. M1은 로봇 1대라 결정을 직접 받아 적용한다.</summary>
-    public async ValueTask StepAsync(Robot robot, long tick, CancellationToken ct = default)
+    /// <summary>로봇 1대의 한 틱 전체.</summary>
+    public ValueTask StepAsync(Robot robot, long tick, CancellationToken ct = default)
+        => StepAllAsync(new[] { robot }, tick, ct);
+
+    /// <summary>여러 로봇의 한 틱. 요청을 모두 모아 맵마다 DecideAsync 1회 → 각 로봇에 적용(01 틱 루프).</summary>
+    public async ValueTask StepAllAsync(IReadOnlyList<Robot> robots, long tick, CancellationToken ct = default)
     {
-        var request = BuildMoveRequest(robot, tick);
-        MoveDecision? decision = null;
-        if (request is { } r)
-            decision = (await _arbiter.DecideAsync(robot.MapId, tick, new[] { r }, ct))[0];
-        await ApplyAsync(robot, tick, decision, ct);
+        var decisions = new MoveDecision?[robots.Count];
+        var pending = new List<(int Index, MoveRequest Request)>();
+        for (var i = 0; i < robots.Count; i++)
+        {
+            if (BuildMoveRequest(robots[i], tick) is { } r)
+                pending.Add((i, r));
+        }
+
+        foreach (var group in pending.GroupBy(p => robots[p.Index].MapId))
+        {
+            var batch = group.ToArray();
+            var result = await _arbiter.DecideAsync(group.Key, tick, batch.Select(p => p.Request).ToArray(), ct);
+            for (var k = 0; k < batch.Length; k++)
+                decisions[batch[k].Index] = result[k];
+        }
+
+        for (var i = 0; i < robots.Count; i++)
+            await ApplyAsync(robots[i], tick, decisions[i], ct);
     }
 
     /// <summary>1단계(계획)와 2단계의 회전·도착 분기까지. 이동이 필요하면 요청을 돌려주고, 아니면 null.</summary>
@@ -78,8 +95,8 @@ public sealed class RobotStepper
             _renderer?.LogPlan(tick, robot.RobotId, robot.Position, robot.Heading, task.Destination, result);
         }
 
-        // 2. [시작] — 회전·도착 분기
-        if (state.Action is not null || robot.Status != RobotStatus.Moving)
+        // 2. [시작] — 회전·도착 분기. Waiting은 이미 다음 칸을 향해 있으므로 바로 재요청
+        if (state.Action is not null || robot.Status is not (RobotStatus.Moving or RobotStatus.Waiting))
             return null;
 
         if (robot.PathIndex == robot.PlannedPath.Count - 1)
@@ -101,6 +118,7 @@ public sealed class RobotStepper
 
         return new MoveRequest(
             robot.RobotId, robot.Position, next.Cell, next.Heading, tick,
+            WaitMs: state.WaitMs,
             RemainingSteps: robot.PlannedPath.Count - 1 - robot.PathIndex,
             TaskPriority: task?.Priority ?? 0);
     }
@@ -115,10 +133,16 @@ public sealed class RobotStepper
             var next = robot.PlannedPath[robot.PathIndex + 1];
             if (!d.Granted)
             {
-                robot.Status = RobotStatus.Waiting;   // M1에선 발생하지 않음. 재시도는 M2
-                _renderer?.LogWait(tick, robot.RobotId, robot.Position, d.Reason);
+                // 이 틱은 제자리. 다음 틱에 대기 시간을 실어 재요청한다
+                if (robot.Status != RobotStatus.Waiting)
+                    _renderer?.LogWait(tick, robot.RobotId, robot.Position, d.Reason);
+                robot.Status = RobotStatus.Waiting;
+                state.WaitMs += _options.TickMs;
+                state.Carry = 0;
                 return;
             }
+            robot.Status = RobotStatus.Moving;   // Waiting이었다면 path_cleared
+            state.WaitMs = 0;
             state.Action = new RobotAction { Kind = RobotActionKind.Move, TargetCell = next.Cell, RemainingMs = _options.MoveMsPerCell + state.Carry };
             state.ActionMs = _options.MoveMsPerCell;
             state.Carry = 0;
@@ -176,6 +200,7 @@ public sealed class RobotStepper
         public RobotAction? Action;
         public int ActionMs;     // 이월 제외 명목 시간. 통계용
         public int Carry;        // 직전 동작의 잔여(0 또는 음수). 다음 동작에 더한다
+        public int WaitMs;       // 연속 거부 누적. 우선순위 입력, 승인되면 0
         public int Moves, Turns;
     }
 }
