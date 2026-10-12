@@ -15,12 +15,12 @@
 관리자는 진단 보고서와 변경 내역을 검토해 승인만 하면 되고, 이후 검증과 배포는 파이프라인이 이어서 처리한다.
 같은 유형의 교착이 반복될수록 대응 시간은 짧아지고, 판단의 근거는 모두 기록으로 남는다.
 
-![3D 시뮬레이션](docs/images/fleet-3d.gif)
+<a href="https://raw.githubusercontent.com/hyunpaper/robot-fleet/main/docs/images/fleet-loop-3d.gif"><img src="docs/images/fleet-loop-3d.gif" alt="3D 시뮬레이션"></a>
 
 <details>
 <summary>2D 탑뷰</summary>
 
-![2D 시뮬레이션](docs/images/fleet-2d.gif)
+<a href="https://raw.githubusercontent.com/hyunpaper/robot-fleet/main/docs/images/fleet-loop-2d.gif"><img src="docs/images/fleet-loop-2d.gif" alt="2D 시뮬레이션"></a>
 
 </details>
 
@@ -119,7 +119,7 @@ Simulator ──(틱마다 배치 이동 요청)──► FleetController ◄─
 
 자체 서버에 k3s 3노드로 구성한다. 아래 주소는 예시다.
 
-![배포 구성](docs/images/deployment.svg)
+<a href="https://raw.githubusercontent.com/hyunpaper/robot-fleet/main/docs/images/deployment.svg"><img src="docs/images/deployment.svg" alt="배포 구성"></a>
 
 | 노드 | 주소 | 역할 |
 |---|---|---|
