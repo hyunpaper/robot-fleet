@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1000" viewBox="0 0 1400 1000" font-family="'Pretendard','Apple SD Gothic Neo','Malgun Gothic','Segoe UI',sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1090" viewBox="0 0 1440 1090" font-family="'Pretendard','Apple SD Gothic Neo','Malgun Gothic','Segoe UI',sans-serif">
 <defs>
 <marker id="m-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1f3a63"/></marker>
 <marker id="m-flow-r" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M10,0 L0,5 L10,10 z" fill="#1f3a63"/></marker>
@@ -9,166 +9,240 @@
 <marker id="m-data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8a5a1c"/></marker>
 <marker id="m-data-r" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M10,0 L0,5 L10,10 z" fill="#8a5a1c"/></marker>
 </defs>
-<rect x="0" y="0" width="1400" height="1000" rx="0" fill="#f6f7f9" stroke="none" stroke-width="1"/>
-<rect x="16" y="16" width="1368" height="968" rx="14" fill="#ffffff" stroke="#e3e6ea" stroke-width="1"/>
+<rect x="0" y="0" width="1440" height="1090" rx="0" fill="#f6f7f9" stroke="none" stroke-width="1"/>
+<rect x="16" y="16" width="1408" height="1058" rx="14" fill="#ffffff" stroke="#e3e6ea" stroke-width="1"/>
 <text x="40" y="48" font-size="22" fill="#1f2937" font-weight="bold" text-anchor="start">robot-fleet 배포 구성</text>
-<text x="40" y="70" font-size="12.5" fill="#6b7280" font-weight="normal" text-anchor="start">k3s 3노드 · 네임스페이스 4개 · 주소는 README 예시</text>
-<rect x="790" y="62" width="220" height="50" rx="10" fill="#ffffff" stroke="#b9c0ca" stroke-width="1.2"/>
-<text x="900.0" y="84" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="middle">관리자 · 관제 화면</text>
-<text x="900.0" y="101" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="middle">브라우저 (HTTP · WebSocket)</text>
-<rect x="40" y="150" width="1320" height="795" rx="14" fill="#fbfbfc" stroke="#c3c8d0" stroke-width="1.5" stroke-dasharray="7 5"/>
+<text x="40" y="70" font-size="12.5" fill="#6b7280" font-weight="normal" text-anchor="start">k3s control plane 1 + worker 3 · 네임스페이스 4개 · 주소는 README 예시</text>
+<rect x="920" y="62" width="220" height="50" rx="10" fill="#ffffff" stroke="#b9c0ca" stroke-width="1.2"/>
+<text x="1030.0" y="84" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="middle">관리자 · 관제 화면</text>
+<text x="1030.0" y="101" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="middle">브라우저 (HTTP · WebSocket)</text>
+<rect x="40" y="150" width="1360" height="872" rx="14" fill="#fbfbfc" stroke="#c3c8d0" stroke-width="1.5" stroke-dasharray="7 5"/>
 <text x="58" y="174" font-size="14" fill="#1f2937" font-weight="bold" text-anchor="start">k3s 클러스터</text>
 <text x="168" y="174" font-size="11.5" fill="#6b7280" font-weight="normal" text-anchor="start">Traefik · ServiceLB 비활성 → nginx ingress controller</text>
-<rect x="60" y="186" width="380" height="739" rx="10" fill="#eceff3" stroke="#b9c0ca" stroke-width="1.2"/>
-<text x="74" y="206" font-size="14" fill="#1f2937" font-weight="bold" text-anchor="start">node-1</text>
-<text x="132" y="206" font-size="12.5" fill="#1f2937" font-weight="normal" text-anchor="start">192.168.10.11</text>
-<text x="74" y="223" font-size="11.5" fill="#6b7280" font-weight="normal" text-anchor="start">control plane · 데이터 계층</text>
-<rect x="455" y="186" width="435" height="739" rx="10" fill="#eceff3" stroke="#b9c0ca" stroke-width="1.2"/>
-<text x="469" y="206" font-size="14" fill="#1f2937" font-weight="bold" text-anchor="start">node-2</text>
-<text x="527" y="206" font-size="12.5" fill="#1f2937" font-weight="normal" text-anchor="start">192.168.10.12</text>
-<text x="469" y="223" font-size="11.5" fill="#6b7280" font-weight="normal" text-anchor="start">애플리케이션</text>
-<rect x="910" y="186" width="430" height="739" rx="10" fill="#eceff3" stroke="#b9c0ca" stroke-width="1.2"/>
-<text x="924" y="206" font-size="14" fill="#1f2937" font-weight="bold" text-anchor="start">node-3</text>
-<text x="982" y="206" font-size="12.5" fill="#1f2937" font-weight="normal" text-anchor="start">192.168.10.13</text>
-<text x="924" y="223" font-size="11.5" fill="#6b7280" font-weight="normal" text-anchor="start">애플리케이션 · 모니터링</text>
-<rect x="470" y="232" width="855" height="70" rx="8" fill="#f0ebfa" stroke="#b7a3e3" stroke-width="1"/>
-<text x="482" y="249" font-size="11.5" fill="#5b3fa5" font-weight="bold" text-anchor="start">ingress-nginx</text>
-<rect x="585" y="240" width="700" height="54" rx="8" fill="#ffffff" stroke="#5b3fa5" stroke-width="1.2"/>
-<rect x="585" y="240" width="5" height="54" rx="2" fill="#5b3fa5" stroke="none" stroke-width="1"/>
-<text x="601" y="261" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">nginx ingress controller</text>
-<text x="601" y="279" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">host fleet.local · proxy-read-timeout 3600s (WebSocket 유지)</text>
-<rect x="1117.8" y="248" width="157.2" height="17" rx="8" fill="#5b3fa5" stroke="none" stroke-width="1" opacity="0.9"/>
-<text x="1196.4" y="260" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">×1 · 100m / 128Mi</text>
-<rect x="470" y="322" width="855" height="440" rx="8" fill="#e8f0fb" stroke="#8fb0e0" stroke-width="1"/>
-<text x="482" y="339" font-size="11.5" fill="#2b5aa6" font-weight="bold" text-anchor="start">fleet-app</text>
-<text x="548" y="339" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">애플리케이션 pod — node-2 / node-3 분산</text>
-<rect x="500" y="380" width="190" height="64" rx="8" fill="#ffffff" stroke="#2b5aa6" stroke-width="1.2"/>
-<rect x="500" y="380" width="5" height="64" rx="2" fill="#2b5aa6" stroke="none" stroke-width="1"/>
-<text x="516" y="401" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">FleetController</text>
-<rect x="654.8" y="388" width="25.2" height="17" rx="8" fill="#2b5aa6" stroke="none" stroke-width="1" opacity="0.9"/>
-<text x="667.4" y="400" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">×2</text>
-<text x="516" y="418" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">이동 판정 (A* · 락 · 교착)</text>
-<text x="516" y="433" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">무상태 · 200m / 256Mi</text>
-<rect x="500" y="480" width="190" height="64" rx="8" fill="#ffffff" stroke="#2b5aa6" stroke-width="1.2"/>
-<rect x="500" y="480" width="5" height="64" rx="2" fill="#2b5aa6" stroke="none" stroke-width="1"/>
-<text x="516" y="501" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">IngestApi</text>
-<rect x="654.8" y="488" width="25.2" height="17" rx="8" fill="#2b5aa6" stroke="none" stroke-width="1" opacity="0.9"/>
-<text x="667.4" y="500" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">×2</text>
-<text x="516" y="518" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">수신 · 멱등 검사 · 큐 발행</text>
-<text x="516" y="533" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">DB 직접 쓰기 없음 · 200m / 256Mi</text>
-<rect x="500" y="580" width="190" height="64" rx="8" fill="#ffffff" stroke="#2b5aa6" stroke-width="1.2"/>
-<rect x="500" y="580" width="5" height="64" rx="2" fill="#2b5aa6" stroke="none" stroke-width="1"/>
-<text x="516" y="601" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">EventWorker</text>
-<rect x="641.6" y="588" width="38.4" height="17" rx="8" fill="#2b5aa6" stroke="none" stroke-width="1" opacity="0.9"/>
-<text x="660.8" y="600" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">×2~8</text>
-<text x="516" y="618" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">큐 소비 · 배치 INSERT · 집계</text>
-<text x="516" y="633" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">HPA CPU 70% · 300m / 256Mi</text>
-<rect x="500" y="680" width="190" height="64" rx="8" fill="#ffffff" stroke="#2b5aa6" stroke-width="1.2"/>
-<rect x="500" y="680" width="5" height="64" rx="2" fill="#2b5aa6" stroke="none" stroke-width="1"/>
-<text x="516" y="701" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">QueryApi</text>
-<rect x="654.8" y="688" width="25.2" height="17" rx="8" fill="#2b5aa6" stroke="none" stroke-width="1" opacity="0.9"/>
-<text x="667.4" y="700" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">×1</text>
-<text x="516" y="718" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">읽기 전용 REST · WS /ws/live</text>
-<text x="516" y="733" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">100m / 192Mi</text>
-<rect x="830" y="380" width="190" height="64" rx="8" fill="#ffffff" stroke="#2b5aa6" stroke-width="1.2"/>
-<rect x="830" y="380" width="5" height="64" rx="2" fill="#2b5aa6" stroke="none" stroke-width="1"/>
-<text x="846" y="401" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">Simulator</text>
-<rect x="984.8" y="388" width="25.2" height="17" rx="8" fill="#2b5aa6" stroke="none" stroke-width="1" opacity="0.9"/>
-<text x="997.4" y="400" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">×1</text>
-<text x="846" y="418" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">가상 공장 · 틱 100ms · 상태 보유</text>
-<text x="846" y="433" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">Recreate · 500m / 512Mi</text>
-<text x="1005" y="604" font-size="10.5" fill="#6b7280" font-weight="normal" text-anchor="start">HPA: EventWorker 2 → 8 (파티션 16 상한)</text>
-<text x="1005" y="620" font-size="10.5" fill="#6b7280" font-weight="normal" text-anchor="start">scaleDown 안정화 300s · CPU 70% 기준</text>
-<text x="482" y="750" font-size="10.5" fill="#6b7280" font-weight="normal" text-anchor="start">readiness /health/ready (의존성) · liveness /health/live (프로세스) 분리 · 이미지 태그 버전 고정</text>
-<rect x="95" y="240" width="310" height="54" rx="8" fill="#ffffff" stroke="#b9c0ca" stroke-width="1.2"/>
-<rect x="95" y="240" width="5" height="54" rx="2" fill="#b9c0ca" stroke="none" stroke-width="1"/>
-<text x="111" y="261" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">k3s server (control plane)</text>
-<text x="111" y="278" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">agent 노드는 node-token으로 조인</text>
-<rect x="75" y="322" width="350" height="588" rx="8" fill="#fdf1e2" stroke="#e2b579" stroke-width="1"/>
-<text x="87" y="339" font-size="11.5" fill="#9a5b12" font-weight="bold" text-anchor="start">fleet-infra</text>
-<text x="157" y="339" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">데이터 계층 — 앱 재배포와 분리</text>
-<rect x="95" y="380" width="310" height="64" rx="8" fill="#ffffff" stroke="#9a5b12" stroke-width="1.2"/>
-<rect x="95" y="380" width="5" height="64" rx="2" fill="#9a5b12" stroke="none" stroke-width="1"/>
-<text x="111" y="401" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">Redis</text>
-<rect x="369.8" y="388" width="25.2" height="17" rx="8" fill="#9a5b12" stroke="none" stroke-width="1" opacity="0.9"/>
-<text x="382.4" y="400" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">×1</text>
-<text x="111" y="418" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">셀 점유 락 · 로봇 상태 · 멱등 키</text>
-<text x="111" y="433" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">캐시 성격 · 유실 허용 (AOF off/everysec)</text>
-<rect x="95" y="470" width="310" height="84" rx="8" fill="#ffffff" stroke="#9a5b12" stroke-width="1.2"/>
-<rect x="95" y="470" width="5" height="84" rx="2" fill="#9a5b12" stroke="none" stroke-width="1"/>
-<text x="111" y="491" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">RabbitMQ</text>
-<rect x="317.0" y="478" width="78.0" height="17" rx="8" fill="#9a5b12" stroke="none" stroke-width="1" opacity="0.9"/>
-<text x="356.0" y="490" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">×1 (M8 ×3)</text>
-<text x="111" y="508" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">fleet.telemetry / task / conflict</text>
-<text x="111" y="523" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">consistent-hash 16파티션 · SAC</text>
-<text x="111" y="538" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">local PV · Retain · node-1 고정</text>
-<rect x="95" y="580" width="310" height="164" rx="8" fill="#ffffff" stroke="#9a5b12" stroke-width="1.2"/>
-<rect x="95" y="580" width="5" height="164" rx="2" fill="#9a5b12" stroke="none" stroke-width="1"/>
-<text x="111" y="601" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">PostgreSQL</text>
-<rect x="369.8" y="588" width="25.2" height="17" rx="8" fill="#9a5b12" stroke="none" stroke-width="1" opacity="0.9"/>
-<text x="382.4" y="600" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">×1</text>
-<text x="111" y="618" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">robot_telemetry (일 파티션) · task_history</text>
-<text x="111" y="633" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">conflict_log · metrics_minute</text>
-<text x="111" y="648" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">local PV /data/postgres · Retain</text>
-<text x="111" y="663" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">nodeSelector node-1 · 500m / 512Mi</text>
-<rect x="95" y="780" width="310" height="50" rx="8" fill="#ffffff" stroke="#9a5b12" stroke-width="1.2" stroke-dasharray="5 4"/>
-<rect x="95" y="780" width="5" height="50" rx="2" fill="#9a5b12" stroke="none" stroke-width="1"/>
-<text x="111" y="801" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">MinIO (선택)</text>
-<text x="111" y="818" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">용량 큰 디스크 경로 지정</text>
-<text x="87" y="898" font-size="10.5" fill="#6b7280" font-weight="normal" text-anchor="start">registry.local:5000 — 로컬 이미지 레지스트리 등록</text>
-<rect x="925" y="785" width="400" height="125" rx="8" fill="#e9f6ec" stroke="#8ccb9c" stroke-width="1"/>
-<text x="937" y="802" font-size="11.5" fill="#237a3b" font-weight="bold" text-anchor="start">monitoring</text>
-<text x="1011" y="802" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">node-3</text>
-<rect x="940" y="815" width="180" height="80" rx="8" fill="#ffffff" stroke="#237a3b" stroke-width="1.2"/>
-<rect x="940" y="815" width="5" height="80" rx="2" fill="#237a3b" stroke="none" stroke-width="1"/>
-<text x="956" y="836" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">Prometheus</text>
-<rect x="1084.8" y="823" width="25.2" height="17" rx="8" fill="#237a3b" stroke="none" stroke-width="1" opacity="0.9"/>
-<text x="1097.4" y="835" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">×1</text>
-<text x="956" y="853" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">scrape /metrics · exporter</text>
-<text x="956" y="868" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">보존 7일 · 300m / 1Gi</text>
-<rect x="1140" y="815" width="170" height="80" rx="8" fill="#ffffff" stroke="#237a3b" stroke-width="1.2"/>
-<rect x="1140" y="815" width="5" height="80" rx="2" fill="#237a3b" stroke="none" stroke-width="1"/>
-<text x="1156" y="836" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">Grafana</text>
-<rect x="1274.8" y="823" width="25.2" height="17" rx="8" fill="#237a3b" stroke="none" stroke-width="1" opacity="0.9"/>
-<text x="1287.4" y="835" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">×1</text>
-<text x="1156" y="853" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">시스템 · 파이프라인</text>
-<text x="1156" y="868" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">로봇 운영 · 맵 대시보드</text>
-<path d="M1120,855 L1138,855" fill="none" stroke="#7a8390" stroke-width="1.6" marker-end="url(#m-scrape)" stroke-linejoin="round"/>
-<text x="470" y="800" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">node-2: 애플리케이션 pod만 배치</text>
-<text x="470" y="816" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">노드 drain 장애 시연 대상 (kubectl drain node-2)</text>
-<path d="M900.0,112 L900.0,240" fill="none" stroke="#6d4fc0" stroke-width="2" marker-end="url(#m-ing)" stroke-linejoin="round"/>
-<text x="910.0" y="136" font-size="11" fill="#6d4fc0" font-weight="bold" text-anchor="start">fleet.local</text>
-<path d="M1200,294 L1200,528 L690,528" fill="none" stroke="#6d4fc0" stroke-width="1.8" marker-end="url(#m-ing)" stroke-linejoin="round"/>
-<text x="1040" y="540" font-size="11" fill="#6d4fc0" font-weight="normal" text-anchor="middle">/api/v1/events</text>
-<path d="M1260,294 L1260,712 L690,712" fill="none" stroke="#6d4fc0" stroke-width="1.8" marker-end="url(#m-ing)" stroke-linejoin="round"/>
-<text x="960" y="704" font-size="11" fill="#6d4fc0" font-weight="normal" text-anchor="middle">/api/v1 · /ws (WebSocket)</text>
-<path d="M830,412 L690,412" fill="none" stroke="#1f3a63" stroke-width="2" marker-end="url(#m-flow)" stroke-linejoin="round"/>
-<text x="760.0" y="404" font-size="11" fill="#1f3a63" font-weight="bold" text-anchor="middle">① 배치 이동 판정</text>
-<text x="760.0" y="427" font-size="10.5" fill="#1f3a63" font-weight="normal" text-anchor="middle">HTTP 동기 · 틱당 1건</text>
-<path d="M880,444 L880,496 L690,496" fill="none" stroke="#1f3a63" stroke-width="2" marker-end="url(#m-flow)" stroke-linejoin="round"/>
-<text x="785" y="490" font-size="11" fill="#1f3a63" font-weight="bold" text-anchor="middle">② 이벤트 배치 · 비동기</text>
-<path d="M500,412 L405,412" fill="none" stroke="#8a5a1c" stroke-width="1.8" marker-end="url(#m-data)" marker-start="url(#m-data-r)" stroke-linejoin="round"/>
-<text x="452.5" y="404" font-size="10.5" fill="#8a5a1c" font-weight="normal" text-anchor="middle">락 · 상태</text>
-<text x="452.5" y="426" font-size="10.5" fill="#8a5a1c" font-weight="normal" text-anchor="middle">Lua 1회/배치</text>
-<path d="M500,500 L405,500" fill="none" stroke="#8a5a1c" stroke-width="1.8" marker-end="url(#m-data)" stroke-linejoin="round"/>
-<text x="452.5" y="492" font-size="10.5" fill="#8a5a1c" font-weight="normal" text-anchor="middle">AMQP 발행</text>
-<path d="M405,538 L452,538 L452,598 L500,598" fill="none" stroke="#8a5a1c" stroke-width="1.8" marker-end="url(#m-data)" stroke-linejoin="round"/>
-<text x="459" y="574" font-size="10.5" fill="#8a5a1c" font-weight="normal" text-anchor="start">파티션 구독</text>
-<path d="M500,630 L405,630" fill="none" stroke="#8a5a1c" stroke-width="1.8" marker-end="url(#m-data)" stroke-linejoin="round"/>
-<text x="452.5" y="644" font-size="10.5" fill="#8a5a1c" font-weight="normal" text-anchor="middle">배치 INSERT</text>
-<path d="M500,712 L405,712" fill="none" stroke="#8a5a1c" stroke-width="1.8" marker-end="url(#m-data)" stroke-linejoin="round"/>
-<text x="452.5" y="704" font-size="10.5" fill="#8a5a1c" font-weight="normal" text-anchor="middle">조회</text>
-<path d="M1070,815 L1070,762" fill="none" stroke="#7a8390" stroke-width="1.6" marker-end="url(#m-scrape)" stroke-dasharray="5 4" stroke-linejoin="round"/>
-<text x="1077" y="778" font-size="10.5" fill="#7a8390" font-weight="normal" text-anchor="start">scrape /metrics</text>
-<path d="M940,870 L425,870" fill="none" stroke="#7a8390" stroke-width="1.6" marker-end="url(#m-scrape)" stroke-dasharray="5 4" stroke-linejoin="round"/>
-<text x="680" y="864" font-size="10.5" fill="#7a8390" font-weight="normal" text-anchor="middle">exporter scrape — rabbitmq_prometheus · redis / postgres / node_exporter</text>
-<line x1="40" y1="964" x2="74" y2="964" stroke="#6d4fc0" stroke-width="2"/>
-<text x="82" y="968" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">외부 진입 (ingress 경로 라우팅)</text>
-<line x1="260" y1="964" x2="294" y2="964" stroke="#1f3a63" stroke-width="2"/>
-<text x="302" y="968" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">서비스 간 HTTP (동기 · 비동기 배치)</text>
-<line x1="500" y1="964" x2="534" y2="964" stroke="#8a5a1c" stroke-width="2"/>
-<text x="542" y="968" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">데이터 계층 접근 (Redis · AMQP · SQL)</text>
-<line x1="760" y1="964" x2="794" y2="964" stroke="#7a8390" stroke-width="2" stroke-dasharray="5 4"/>
-<text x="802" y="968" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">메트릭 수집</text>
-<text x="1360" y="968" font-size="10.5" fill="#6b7280" font-weight="normal" text-anchor="end">docs/02-infrastructure.md · docs/01-architecture.md 기준</text>
+<rect x="60" y="176" width="240" height="162" rx="10" fill="#eceff3" stroke="#b9c0ca" stroke-width="1.2"/>
+<text x="74" y="196" font-size="14" fill="#1f2937" font-weight="bold" text-anchor="start">cp-1</text>
+<text x="114" y="196" font-size="12.5" fill="#1f2937" font-weight="normal" text-anchor="start">192.168.10.10</text>
+<text x="74" y="213" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">k3s server 전용 · 워크로드 없음(taint)</text>
+<text x="74" y="227" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">2 vCPU · 2GB</text>
+<rect x="74" y="242" width="212" height="84" rx="8" fill="#ffffff" stroke="#b9c0ca" stroke-width="1.2"/>
+<rect x="74" y="242" width="5" height="84" rx="2" fill="#b9c0ca" stroke="none" stroke-width="1"/>
+<text x="90" y="261" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">k3s server</text>
+<text x="90" y="278" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">agent(worker-1~3)는</text>
+<text x="90" y="292" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">node-token으로 조인</text>
+<rect x="320" y="176" width="340" height="834" rx="10" fill="#eceff3" stroke="#b9c0ca" stroke-width="1.2"/>
+<text x="334" y="196" font-size="14" fill="#1f2937" font-weight="bold" text-anchor="start">worker-1</text>
+<text x="402" y="196" font-size="12.5" fill="#1f2937" font-weight="normal" text-anchor="start">192.168.10.11</text>
+<text x="334" y="213" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">애플리케이션 · PostgreSQL</text>
+<text x="334" y="227" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">Redis/Sentinel/RabbitMQ 멤버</text>
+<rect x="680" y="176" width="340" height="834" rx="10" fill="#eceff3" stroke="#b9c0ca" stroke-width="1.2"/>
+<text x="694" y="196" font-size="14" fill="#1f2937" font-weight="bold" text-anchor="start">worker-2</text>
+<text x="762" y="196" font-size="12.5" fill="#1f2937" font-weight="normal" text-anchor="start">192.168.10.12</text>
+<text x="694" y="213" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">애플리케이션</text>
+<text x="694" y="227" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">Redis/Sentinel/RabbitMQ 멤버</text>
+<rect x="1040" y="176" width="340" height="834" rx="10" fill="#eceff3" stroke="#b9c0ca" stroke-width="1.2"/>
+<text x="1054" y="196" font-size="14" fill="#1f2937" font-weight="bold" text-anchor="start">worker-3</text>
+<text x="1122" y="196" font-size="12.5" fill="#1f2937" font-weight="normal" text-anchor="start">192.168.10.13</text>
+<text x="1054" y="213" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">애플리케이션 · 모니터링</text>
+<text x="1054" y="227" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">Redis/Sentinel/RabbitMQ 멤버</text>
+<rect x="925.4" y="184" width="84.6" height="17" rx="8" fill="#6b7280" stroke="none" stroke-width="1" opacity="0.9"/>
+<text x="967.7" y="196" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">drain 시연 대상</text>
+<rect x="330" y="238" width="1040" height="62" rx="8" fill="#f0ebfa" stroke="#b7a3e3" stroke-width="1"/>
+<text x="342" y="255" font-size="11.5" fill="#5b3fa5" font-weight="bold" text-anchor="start">ingress-nginx</text>
+<rect x="460" y="246" width="895" height="46" rx="8" fill="#ffffff" stroke="#5b3fa5" stroke-width="1.2"/>
+<rect x="460" y="246" width="5" height="46" rx="2" fill="#5b3fa5" stroke="none" stroke-width="1"/>
+<text x="476" y="266" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">nginx ingress controller</text>
+<text x="476" y="283" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">host fleet.local · proxy-read-timeout 3600s (WebSocket 유지)</text>
+<rect x="1220.8" y="253" width="124.19999999999999" height="17" rx="8" fill="#5b3fa5" stroke="none" stroke-width="1" opacity="0.9"/>
+<text x="1282.9" y="265" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">×1 · 100m / 128Mi</text>
+<rect x="330" y="316" width="1040" height="296" rx="8" fill="#e8f0fb" stroke="#8fb0e0" stroke-width="1"/>
+<text x="342" y="333" font-size="11.5" fill="#2b5aa6" font-weight="bold" text-anchor="start">fleet-app</text>
+<text x="342" y="586" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">애플리케이션 pod — worker 3대 모두 배치 가능</text>
+<text x="342" y="602" font-size="10.5" fill="#6b7280" font-weight="normal" text-anchor="start">readiness /health/ready (의존성) · liveness /health/live (프로세스) 분리 · 이미지 태그 버전 고정</text>
+<rect x="350" y="346" width="310" height="72" rx="8" fill="#ffffff" stroke="#2b5aa6" stroke-width="1.2"/>
+<rect x="350" y="346" width="5" height="72" rx="2" fill="#2b5aa6" stroke="none" stroke-width="1"/>
+<text x="366" y="367" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">QueryApi</text>
+<rect x="624.8" y="355" width="25.2" height="17" rx="8" fill="#2b5aa6" stroke="none" stroke-width="1" opacity="0.9"/>
+<text x="637.4" y="367" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">×1</text>
+<text x="366" y="384" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">읽기 전용 REST · WS /ws/live</text>
+<text x="366" y="399" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">100m / 192Mi</text>
+<rect x="695" y="346" width="310" height="72" rx="8" fill="#ffffff" stroke="#2b5aa6" stroke-width="1.2"/>
+<rect x="695" y="346" width="5" height="72" rx="2" fill="#2b5aa6" stroke="none" stroke-width="1"/>
+<text x="711" y="367" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">EventWorker</text>
+<rect x="956.6" y="355" width="38.4" height="17" rx="8" fill="#2b5aa6" stroke="none" stroke-width="1" opacity="0.9"/>
+<text x="975.8" y="367" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">×2~8</text>
+<text x="711" y="384" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">큐 소비 · 배치 INSERT · 집계</text>
+<text x="711" y="399" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">HPA CPU 70% (2 → 8) · 300m / 256Mi</text>
+<rect x="1040" y="346" width="310" height="72" rx="8" fill="#ffffff" stroke="#2b5aa6" stroke-width="1.2"/>
+<rect x="1040" y="346" width="5" height="72" rx="2" fill="#2b5aa6" stroke="none" stroke-width="1"/>
+<text x="1056" y="367" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">IngestApi</text>
+<rect x="1314.8" y="355" width="25.2" height="17" rx="8" fill="#2b5aa6" stroke="none" stroke-width="1" opacity="0.9"/>
+<text x="1327.4" y="367" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">×2</text>
+<text x="1056" y="384" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">수신 · 멱등 검사 · 큐 발행</text>
+<text x="1056" y="399" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">DB 직접 쓰기 없음 · 200m / 256Mi</text>
+<rect x="350" y="470" width="450" height="90" rx="8" fill="#ffffff" stroke="#2b5aa6" stroke-width="1.2"/>
+<rect x="350" y="470" width="5" height="90" rx="2" fill="#2b5aa6" stroke="none" stroke-width="1"/>
+<text x="366" y="491" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">FleetController</text>
+<rect x="718.6" y="479" width="71.4" height="17" rx="8" fill="#2b5aa6" stroke="none" stroke-width="1" opacity="0.9"/>
+<text x="754.3" y="491" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">preferred</text>
+<rect x="654.4" y="479" width="58.199999999999996" height="17" rx="8" fill="#2b5aa6" stroke="none" stroke-width="1" opacity="0.9"/>
+<text x="683.5" y="491" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">×2 (상한)</text>
+<text x="366" y="508" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">판정 /move-requests/batch · 경로 /paths/batch · 재전송 멱등</text>
+<text x="366" y="523" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">무상태 · HPA 없음 · 200m / 256Mi</text>
+<text x="366" y="538" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">서로 다른 worker 분산 (preferred)</text>
+<rect x="1070" y="470" width="280" height="90" rx="8" fill="#ffffff" stroke="#2b5aa6" stroke-width="1.2"/>
+<rect x="1070" y="470" width="5" height="90" rx="2" fill="#2b5aa6" stroke="none" stroke-width="1"/>
+<text x="1086" y="491" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">Simulator</text>
+<rect x="1314.8" y="479" width="25.2" height="17" rx="8" fill="#2b5aa6" stroke="none" stroke-width="1" opacity="0.9"/>
+<text x="1327.4" y="491" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">×1</text>
+<text x="1086" y="508" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">가상 공장 · 틱 100ms · 상태 보유</text>
+<text x="1086" y="523" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">성공한 FleetController 고정 선택</text>
+<text x="1086" y="538" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">Recreate · 500m / 512Mi</text>
+<rect x="330" y="656" width="320" height="304" rx="8" fill="#fdf1e2" stroke="#e2b579" stroke-width="1"/>
+<text x="342" y="673" font-size="11.5" fill="#9a5b12" font-weight="bold" text-anchor="start">fleet-infra</text>
+<rect x="340" y="680" width="300" height="68" rx="8" fill="#ffffff" stroke="#9a5b12" stroke-width="1.2"/>
+<rect x="340" y="680" width="5" height="68" rx="2" fill="#9a5b12" stroke="none" stroke-width="1"/>
+<text x="356" y="699" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">Redis</text>
+<rect x="565.2" y="687" width="64.8" height="17" rx="8" fill="#9a5b12" stroke="none" stroke-width="1" opacity="0.9"/>
+<text x="597.6" y="699" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">required</text>
+<text x="356" y="716" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">primary 1 + replica 2 · AOF everysec</text>
+<text x="356" y="730" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">local PV /data/redis</text>
+<text x="356" y="744" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">worker당 1 · 100m / 256Mi</text>
+<rect x="340" y="756" width="300" height="54" rx="8" fill="#ffffff" stroke="#9a5b12" stroke-width="1.2"/>
+<rect x="340" y="756" width="5" height="54" rx="2" fill="#9a5b12" stroke="none" stroke-width="1"/>
+<text x="356" y="775" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">Sentinel</text>
+<rect x="565.2" y="763" width="64.8" height="17" rx="8" fill="#9a5b12" stroke="none" stroke-width="1" opacity="0.9"/>
+<text x="597.6" y="775" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">required</text>
+<text x="356" y="792" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">×3 · quorum 2 · down-after 5s</text>
+<text x="356" y="806" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">worker당 1 · 50m / 32Mi</text>
+<rect x="340" y="818" width="300" height="68" rx="8" fill="#ffffff" stroke="#9a5b12" stroke-width="1.2"/>
+<rect x="340" y="818" width="5" height="68" rx="2" fill="#9a5b12" stroke="none" stroke-width="1"/>
+<text x="356" y="837" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">RabbitMQ</text>
+<rect x="565.2" y="825" width="64.8" height="17" rx="8" fill="#9a5b12" stroke="none" stroke-width="1" opacity="0.9"/>
+<text x="597.6" y="837" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">required</text>
+<text x="356" y="854" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">×3 클러스터 · worker당 1 · 300m / 512Mi</text>
+<text x="356" y="868" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">task/conflict quorum 32 · telemetry classic 16</text>
+<text x="356" y="882" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">local PV /data/rabbitmq</text>
+<rect x="340" y="894" width="300" height="54" rx="8" fill="#ffffff" stroke="#9a5b12" stroke-width="1.2"/>
+<rect x="340" y="894" width="5" height="54" rx="2" fill="#9a5b12" stroke="none" stroke-width="1"/>
+<text x="356" y="913" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">PostgreSQL</text>
+<rect x="604.8" y="901" width="25.2" height="17" rx="8" fill="#9a5b12" stroke="none" stroke-width="1" opacity="0.9"/>
+<text x="617.4" y="913" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">×1</text>
+<text x="356" y="930" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">worker-1 고정 · 단일 (HA 범위 밖)</text>
+<text x="356" y="944" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">local PV /data/postgres · 500m / 512Mi</text>
+<rect x="690" y="656" width="320" height="242" rx="8" fill="#fdf1e2" stroke="#e2b579" stroke-width="1"/>
+<text x="702" y="673" font-size="11.5" fill="#9a5b12" font-weight="bold" text-anchor="start">fleet-infra</text>
+<rect x="700" y="680" width="300" height="68" rx="8" fill="#ffffff" stroke="#9a5b12" stroke-width="1.2"/>
+<rect x="700" y="680" width="5" height="68" rx="2" fill="#9a5b12" stroke="none" stroke-width="1"/>
+<text x="716" y="699" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">Redis</text>
+<rect x="925.2" y="687" width="64.8" height="17" rx="8" fill="#9a5b12" stroke="none" stroke-width="1" opacity="0.9"/>
+<text x="957.6" y="699" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">required</text>
+<text x="716" y="716" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">primary 1 + replica 2 · AOF everysec</text>
+<text x="716" y="730" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">local PV /data/redis</text>
+<text x="716" y="744" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">worker당 1 · 100m / 256Mi</text>
+<rect x="700" y="756" width="300" height="54" rx="8" fill="#ffffff" stroke="#9a5b12" stroke-width="1.2"/>
+<rect x="700" y="756" width="5" height="54" rx="2" fill="#9a5b12" stroke="none" stroke-width="1"/>
+<text x="716" y="775" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">Sentinel</text>
+<rect x="925.2" y="763" width="64.8" height="17" rx="8" fill="#9a5b12" stroke="none" stroke-width="1" opacity="0.9"/>
+<text x="957.6" y="775" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">required</text>
+<text x="716" y="792" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">×3 · quorum 2 · down-after 5s</text>
+<text x="716" y="806" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">worker당 1 · 50m / 32Mi</text>
+<rect x="700" y="818" width="300" height="68" rx="8" fill="#ffffff" stroke="#9a5b12" stroke-width="1.2"/>
+<rect x="700" y="818" width="5" height="68" rx="2" fill="#9a5b12" stroke="none" stroke-width="1"/>
+<text x="716" y="837" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">RabbitMQ</text>
+<rect x="925.2" y="825" width="64.8" height="17" rx="8" fill="#9a5b12" stroke="none" stroke-width="1" opacity="0.9"/>
+<text x="957.6" y="837" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">required</text>
+<text x="716" y="854" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">×3 클러스터 · worker당 1 · 300m / 512Mi</text>
+<text x="716" y="868" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">task/conflict quorum 32 · telemetry classic 16</text>
+<text x="716" y="882" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">local PV /data/rabbitmq</text>
+<rect x="1050" y="656" width="320" height="242" rx="8" fill="#fdf1e2" stroke="#e2b579" stroke-width="1"/>
+<text x="1062" y="673" font-size="11.5" fill="#9a5b12" font-weight="bold" text-anchor="start">fleet-infra</text>
+<rect x="1060" y="680" width="300" height="68" rx="8" fill="#ffffff" stroke="#9a5b12" stroke-width="1.2"/>
+<rect x="1060" y="680" width="5" height="68" rx="2" fill="#9a5b12" stroke="none" stroke-width="1"/>
+<text x="1076" y="699" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">Redis</text>
+<rect x="1285.2" y="687" width="64.8" height="17" rx="8" fill="#9a5b12" stroke="none" stroke-width="1" opacity="0.9"/>
+<text x="1317.6" y="699" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">required</text>
+<text x="1076" y="716" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">primary 1 + replica 2 · AOF everysec</text>
+<text x="1076" y="730" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">local PV /data/redis</text>
+<text x="1076" y="744" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">worker당 1 · 100m / 256Mi</text>
+<rect x="1060" y="756" width="300" height="54" rx="8" fill="#ffffff" stroke="#9a5b12" stroke-width="1.2"/>
+<rect x="1060" y="756" width="5" height="54" rx="2" fill="#9a5b12" stroke="none" stroke-width="1"/>
+<text x="1076" y="775" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">Sentinel</text>
+<rect x="1285.2" y="763" width="64.8" height="17" rx="8" fill="#9a5b12" stroke="none" stroke-width="1" opacity="0.9"/>
+<text x="1317.6" y="775" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">required</text>
+<text x="1076" y="792" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">×3 · quorum 2 · down-after 5s</text>
+<text x="1076" y="806" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">worker당 1 · 50m / 32Mi</text>
+<rect x="1060" y="818" width="300" height="68" rx="8" fill="#ffffff" stroke="#9a5b12" stroke-width="1.2"/>
+<rect x="1060" y="818" width="5" height="68" rx="2" fill="#9a5b12" stroke="none" stroke-width="1"/>
+<text x="1076" y="837" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">RabbitMQ</text>
+<rect x="1285.2" y="825" width="64.8" height="17" rx="8" fill="#9a5b12" stroke="none" stroke-width="1" opacity="0.9"/>
+<text x="1317.6" y="837" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">required</text>
+<text x="1076" y="854" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">×3 클러스터 · worker당 1 · 300m / 512Mi</text>
+<text x="1076" y="868" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">task/conflict quorum 32 · telemetry classic 16</text>
+<text x="1076" y="882" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">local PV /data/rabbitmq</text>
+<rect x="1050" y="906" width="320" height="98" rx="8" fill="#e9f6ec" stroke="#8ccb9c" stroke-width="1"/>
+<text x="1062" y="923" font-size="11.5" fill="#237a3b" font-weight="bold" text-anchor="start">monitoring</text>
+<text x="1136" y="923" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">worker-3</text>
+<rect x="1060" y="932" width="150" height="62" rx="8" fill="#ffffff" stroke="#237a3b" stroke-width="1.2"/>
+<rect x="1060" y="932" width="5" height="62" rx="2" fill="#237a3b" stroke="none" stroke-width="1"/>
+<text x="1076" y="951" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">Prometheus</text>
+<rect x="1174.8" y="939" width="25.2" height="17" rx="8" fill="#237a3b" stroke="none" stroke-width="1" opacity="0.9"/>
+<text x="1187.4" y="951" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">×1</text>
+<text x="1076" y="968" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">보존 7일</text>
+<text x="1076" y="982" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">300m / 1Gi</text>
+<rect x="1220" y="932" width="140" height="62" rx="8" fill="#ffffff" stroke="#237a3b" stroke-width="1.2"/>
+<rect x="1220" y="932" width="5" height="62" rx="2" fill="#237a3b" stroke="none" stroke-width="1"/>
+<text x="1236" y="951" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">Grafana</text>
+<rect x="1324.8" y="939" width="25.2" height="17" rx="8" fill="#237a3b" stroke="none" stroke-width="1" opacity="0.9"/>
+<text x="1337.4" y="951" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">×1</text>
+<text x="1236" y="968" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">시스템 · 파이프라인</text>
+<text x="1236" y="982" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">100m / 256Mi</text>
+<text x="64" y="900" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">drain 대상 worker-2</text>
+<text x="64" y="916" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">Redis · Sentinel · RabbitMQ 멤버 포함,</text>
+<text x="64" y="932" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">장애 조치 동반</text>
+<text x="64" y="970" font-size="10.5" fill="#6b7280" font-weight="normal" text-anchor="start">registry.local:5000</text>
+<text x="64" y="985" font-size="10.5" fill="#6b7280" font-weight="normal" text-anchor="start">로컬 이미지 레지스트리 등록</text>
+<path d="M1030.0,112 L1030.0,246" fill="none" stroke="#6d4fc0" stroke-width="2" marker-end="url(#m-ing)" stroke-linejoin="round"/>
+<text x="1040.0" y="136" font-size="11" fill="#6d4fc0" font-weight="bold" text-anchor="start">fleet.local</text>
+<path d="M500,292 L500,346" fill="none" stroke="#6d4fc0" stroke-width="1.8" marker-end="url(#m-ing)" stroke-linejoin="round"/>
+<text x="510" y="334" font-size="11" fill="#6d4fc0" font-weight="normal" text-anchor="start">/api/v1 · /ws (WebSocket)</text>
+<path d="M1200,292 L1200,346" fill="none" stroke="#6d4fc0" stroke-width="1.8" marker-end="url(#m-ing)" stroke-linejoin="round"/>
+<text x="1210" y="334" font-size="11" fill="#6d4fc0" font-weight="normal" text-anchor="start">/api/v1/events</text>
+<path d="M1070,515 L800,515" fill="none" stroke="#1f3a63" stroke-width="2" marker-end="url(#m-flow)" stroke-linejoin="round"/>
+<text x="935" y="491" font-size="11" fill="#1f3a63" font-weight="bold" text-anchor="middle">① 배치 이동 판정 · 틱당 1건</text>
+<text x="935" y="507" font-size="10.5" fill="#1f3a63" font-weight="normal" text-anchor="middle">HTTP 동기 · headless</text>
+<text x="935" y="532" font-size="10.5" fill="#1f3a63" font-weight="normal" text-anchor="middle">실패 시 교대 · 재전송</text>
+<path d="M1200,470 L1200,418" fill="none" stroke="#1f3a63" stroke-width="2" marker-end="url(#m-flow)" stroke-linejoin="round"/>
+<text x="1190" y="449" font-size="11" fill="#1f3a63" font-weight="bold" text-anchor="end">② 이벤트 배치 · 비동기</text>
+<path d="M400,612 L400,656" fill="none" stroke="#8a5a1c" stroke-width="1.8" marker-end="url(#m-data)" marker-start="url(#m-data-r)" stroke-linejoin="round"/>
+<text x="410" y="630" font-size="10.5" fill="#8a5a1c" font-weight="normal" text-anchor="start">FleetController → Redis</text>
+<text x="410" y="645" font-size="10.5" fill="#8a5a1c" font-weight="normal" text-anchor="start">읽기 1 + 커밋 1 (+WAIT 1)/배치</text>
+<path d="M600,612 L600,656" fill="none" stroke="#8a5a1c" stroke-width="1.8" marker-end="url(#m-data)" marker-start="url(#m-data-r)" stroke-linejoin="round"/>
+<text x="610" y="630" font-size="10.5" fill="#8a5a1c" font-weight="normal" text-anchor="start">EventWorker · QueryApi</text>
+<text x="610" y="645" font-size="10.5" fill="#8a5a1c" font-weight="normal" text-anchor="start">→ PostgreSQL (INSERT · 조회)</text>
+<path d="M790,612 L790,656" fill="none" stroke="#8a5a1c" stroke-width="1.8" marker-end="url(#m-data)" marker-start="url(#m-data-r)" stroke-linejoin="round"/>
+<text x="800" y="630" font-size="10.5" fill="#8a5a1c" font-weight="normal" text-anchor="start">IngestApi → RabbitMQ 발행</text>
+<text x="800" y="645" font-size="10.5" fill="#8a5a1c" font-weight="normal" text-anchor="start">RabbitMQ → EventWorker 구독</text>
+<path d="M1200,656 L1200,612" fill="none" stroke="#8a5a1c" stroke-width="1.6" marker-end="url(#m-data)" stroke-dasharray="5 4" stroke-linejoin="round"/>
+<text x="1190" y="630" font-size="10.5" fill="#8a5a1c" font-weight="normal" text-anchor="end">Sentinel → FleetController · IngestApi</text>
+<text x="1190" y="645" font-size="10.5" fill="#8a5a1c" font-weight="normal" text-anchor="end">primary 탐색</text>
+<path d="M1050,984 L490,984 L490,960" fill="none" stroke="#7a8390" stroke-width="1.6" marker-end="url(#m-scrape)" stroke-dasharray="5 4" stroke-linejoin="round"/>
+<path d="M850,984 L850,898" fill="none" stroke="#7a8390" stroke-width="1.6" marker-end="url(#m-scrape)" stroke-dasharray="5 4" stroke-linejoin="round"/>
+<text x="670" y="977" font-size="10.5" fill="#7a8390" font-weight="normal" text-anchor="middle">scrape /metrics · exporter</text>
+<line x1="40" y1="1040" x2="74" y2="1040" stroke="#6d4fc0" stroke-width="2"/>
+<text x="82" y="1044" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">외부 진입 (ingress 경로 라우팅)</text>
+<line x1="260" y1="1040" x2="294" y2="1040" stroke="#1f3a63" stroke-width="2"/>
+<text x="302" y="1044" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">서비스 간 HTTP (동기 · 비동기 배치)</text>
+<line x1="500" y1="1040" x2="534" y2="1040" stroke="#8a5a1c" stroke-width="2"/>
+<text x="542" y="1044" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">데이터 계층 접근 (Redis · AMQP · SQL)</text>
+<line x1="760" y1="1040" x2="794" y2="1040" stroke="#8a5a1c" stroke-width="2" stroke-dasharray="5 4"/>
+<text x="802" y="1044" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">Sentinel primary 탐색</text>
+<line x1="960" y1="1040" x2="994" y2="1040" stroke="#7a8390" stroke-width="2" stroke-dasharray="5 4"/>
+<text x="1002" y="1044" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">메트릭 수집</text>
+<rect x="40" y="1053" width="64.8" height="17" rx="8" fill="#9a5b12" stroke="none" stroke-width="1" opacity="0.9"/>
+<text x="72.4" y="1065" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">required</text>
+<text x="112.8" y="1066" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">anti-affinity — 데이터 계층 (worker당 1)</text>
+<rect x="330" y="1053" width="71.4" height="17" rx="8" fill="#2b5aa6" stroke="none" stroke-width="1" opacity="0.9"/>
+<text x="365.7" y="1065" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">preferred</text>
+<text x="409.4" y="1066" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">anti-affinity — FleetController</text>
+<text x="1400" y="1066" font-size="10.5" fill="#6b7280" font-weight="normal" text-anchor="end">docs/01 · 02 · 07 · 08 기준</text>
 </svg>
