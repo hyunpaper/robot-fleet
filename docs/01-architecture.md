@@ -225,7 +225,7 @@ POST /api/v1/events/batch    배치 (최대 500건)
 - 이벤트 종류별 핸들러
 - 배치 삽입 (개별 INSERT 금지)
 - 증분 집계 갱신
-- 실패 시 재시도 → 초과하면 DLQ
+- 실패 시 재시도 → 초과하면 DLQ. DB 일시 오류는 ack 없이 같은 배치를 재시도하고, 독 메시지 · 전달 횟수 초과만 DLQ (10 §6)
 
 ---
 
@@ -494,6 +494,8 @@ CREATE TABLE metrics_minute (
 );
 ```
 
+이벤트 영수증(`task_event_log` · `robot_status_log`), 전이 검증 상태(`robot_state`), DEFAULT 파티션, 마이그레이션 이력은 10 §8.
+
 ### 텔레메트리 적재 전략
 
 초당 수천 건을 개별 INSERT하면 DB가 먼저 죽는다.
@@ -558,7 +560,7 @@ ack 전 메시지 재전달. 세 경우 모두 **같은 `eventId`가 두 번 온
 | `task_history` | `task_id` | `ON CONFLICT DO UPDATE ... WHERE excluded.status > task_history.status` | 작업은 상태가 단조 증가. 늦게 온 낮은 상태는 무시 |
 | `conflict_log` | `event_id` | `ON CONFLICT DO NOTHING` | 같은 충돌을 두 번 세면 교착 발생률이 틀어진다 |
 | `robot_telemetry` | `(map_id, robot_id, tick, occurred_at)` | `ON CONFLICT DO NOTHING` | 자연 키. 한 로봇은 틱당 1행. `occurred_at`은 파티션 키라 포함해야 함 |
-| `metrics_minute` | `(map_id, robot_id, minute)` | 증분 갱신 전 `event_id`를 `metrics_applied` 집합(Redis Set, TTL 10m)으로 확인 | 집계는 되돌릴 수 없으므로 적용 전에 거른다 |
+| `metrics_minute` | `(map_id, robot_id, minute)` | 같은 트랜잭션의 원본 INSERT `ON CONFLICT DO NOTHING RETURNING`으로 **새로 들어간 행만** 가산 (10 §6) | 집계는 되돌릴 수 없으므로 적용 전에 거른다. 별도 적용 집합 없이 원본 행 삽입과 원자적 |
 
 > **텔레메트리까지 막는 이유** — "유실 허용"이지 "중복 허용"이 아니다. 중복 행은
 > 통행량 히트맵과 시간 분해를 부풀린다. 자연 키 제약은 배치 INSERT에서 `ON CONFLICT`

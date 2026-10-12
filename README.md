@@ -86,6 +86,7 @@ Simulator ──(틱마다 배치 이동 요청)──► FleetController ◄─
 | [07-high-availability](docs/07-high-availability.md) | 관제 서버 2대, Redis Sentinel, RabbitMQ quorum queue, 3노드 분산 |
 | [08-ha-detailed-design](docs/08-ha-detailed-design.md) | 해시 체인 워터마크, Lua 규약, Sentinel·큐 설정 값, 노드 배치, 장애 주입 측정 |
 | [09-m3-pipeline](docs/09-m3-pipeline.md) | M3 범위, 서비스 경계, 유실 0 증명 방법, 테스트 전략 |
+| [10-m3-detailed-design](docs/10-m3-detailed-design.md) | 이벤트 계약, 발행 확인, 워커 배치·배정, 스키마, 테스트 목록, 작업 분할 |
 
 ---
 
@@ -95,7 +96,7 @@ Simulator ──(틱마다 배치 이동 요청)──► FleetController ◄─
 |---|---|
 | 언어 | C# / .NET 8 |
 | API · 백그라운드 | ASP.NET Core Minimal API, Worker Service |
-| 메시징 | RabbitMQ (MassTransit) |
+| 메시징 | RabbitMQ (RabbitMQ.Client) |
 | 상태 · 락 | Redis |
 | 저장소 | PostgreSQL |
 | 배포 | k3s, nginx ingress |
