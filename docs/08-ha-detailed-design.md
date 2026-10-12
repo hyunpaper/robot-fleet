@@ -16,7 +16,7 @@
 | C3 | 재전송 기록 키 `(mapId, tick)`, TTL 수 틱 | 맵 해시 안에 **최신 1틱 기록만** 둔다. 다음 틱 커밋이 덮어쓴다 | Simulator는 응답을 받기 전에 다음 틱을 보내지 않고, 다음 틱을 보낸 뒤에는 이전 틱을 다시 보내지 않는다. 기록 = 워터마크가 되어 별도 TTL 조정이 필요 없다 |
 | C4 | (01) Redis 왕복 배치당 1회(Lua) | 배치당 **2회**: 읽기 Lua 1 + 커밋 Lua 1(`WAIT`는 커밋과 파이프라인) | 판정 기록에 교착 해소 결과까지 넣어야 락과 같은 원자 단위가 된다. 교착 탐지는 락 결과를 본 뒤에야 가능하므로 "읽기 → 메모리 판정 → 원자 커밋"으로 나눈다 |
 | C5 | (01) 칸별 락 키, 논리 20틱 + 실시간 TTL 만료 | 맵당 **단일 해시**, 칸별 만료 폐지. 해제는 명시적으로만 | 기존 규칙에 결함 두 개: ① 이동 요청을 보내지 않는 정지 로봇(Idle·Loading)의 칸 락이 20틱 뒤 만료되어 다른 로봇이 그 칸을 승인받는다. ② 틱 정지가 실시간 TTL(배속 1에서 2초)보다 길면 칸 락이 일부만 사라져 구멍이 생긴다. 단일 키는 통째로만 만료되므로 구멍이 생기지 않는다 |
-| C6 | 틱마다 로드밸런서가 임의 인스턴스로 | **headless Service + Simulator 측 선택.** 틱마다 교대, 재전송은 실패한 인스턴스를 제외 | ClusterIP는 HTTP keep-alive 연결 하나에 고정되어 교대가 안 되고, 재전송이 같은 죽은 pod로 갈 수 있다. cp-1 다운 시 endpoint 갱신이 멈춰 죽은 pod가 Service에 남는다 |
+| C6 | 틱마다 로드밸런서가 임의 인스턴스로 | **headless Service + Simulator 측 선택.** 성공한 인스턴스에 고정, 실패 · 409 시 다른 인스턴스로 | ClusterIP는 HTTP keep-alive 연결 하나에 고정되어 교대가 안 되고, 재전송이 같은 죽은 pod로 갈 수 있다. cp-1 다운 시 endpoint 갱신이 멈춰 죽은 pod가 Service에 남는다 |
 | C7 | (01) Ingest 멱등 키 실패 처리 없음 | Redis 오류 시 1단계를 **건너뛰고 발행**(fail-open) | 07 정합성 원칙에서 `idem:*`은 유실 허용, 중복은 워커가 막는다. Redis 장애 조치(최대 30초) 동안 이벤트 파이프라인을 세울 이유가 없다 |
 
 ---
@@ -31,7 +31,7 @@
 
 | 필드 | 값 | 역할 |
 |---|---|---|
-| `epoch` | Simulator가 발급한 세대 id | 재주장마다 바뀐다. 기존 `fleet:epoch:{mapId}` 대체 |
+| `epoch` | Simulator가 발급한 세대 id, **UUIDv7** (소문자 표준 표기) | 재주장마다 바뀌고 단조 증가한다. 문자열 비교 = 발급 시각 비교. 기존 `fleet:epoch:{mapId}` 대체 |
 | `wm` | 마지막으로 커밋된 tick | 워터마크 |
 | `wd` | 마지막 커밋의 다이제스트 | 체인 꼬리 |
 | `wd0` | 재주장 시점의 다이제스트(체인 뿌리) | 재주장 재요청 응답 |
@@ -54,8 +54,10 @@
 
 ```
 d0 = sha1(epoch ‖ 재주장 본문 해시)                     -- 재주장이 뿌리를 만든다
-dT = sha1(d(prev) ‖ 응답 본문 T)                        -- 커밋마다 한 고리
+dT = sha1(d(prev) ‖ reqHash T ‖ 응답 본문 T)            -- 커밋마다 한 고리
 ```
+
+`reqHash`(요청 · 해제 전체)를 고리에 넣는다. 응답만 넣으면 `releases`가 다르고 `decisions`가 같은 두 커밋이 같은 꼬리를 가져, "같은 꼬리 ⇒ 같은 칸 상태"가 Simulator 본문 불변 가정에 기대게 된다.
 
 요청은 `prev = {tick, digest}`(Simulator가 마지막으로 **적용한** 판정)를 싣고, 응답은 새 `digest`를 돌려준다.
 
@@ -107,7 +109,6 @@ dT = sha1(d(prev) ‖ 응답 본문 T)                        -- 커밋마다 �
 | `save` | `""` | RDB fork 불필요 |
 | `repl-diskless-sync` / `-delay` | yes / **0** | 기본 지연 5초가 장애 조치 후 전체 재동기화를 그만큼 늦춘다. 30초 예산에서 뺀다 |
 | `maxmemory` / 정책 | 192mb / `noeviction` | 맵 해시를 축출하면 안 된다. 메모리 limit 512Mi에서 AOF rewrite fork 여유를 남긴다 |
-| `hz` | **100** | 블로킹 명령(`WAIT`) 타임아웃 검사가 서버 주기에 묶인다. 기본 10이면 최대 100ms 늦을 수 있다. 100이면 10ms (M4 측정) |
 | `auto-aof-rewrite-min-size` | 64mb | 틱마다 `rec`(약 15KB)를 덮어써 AOF가 빨리 자란다. 데이터 자체는 1MB 미만이라 rewrite가 싸다 |
 
 ---
@@ -126,23 +127,24 @@ dT = sha1(d(prev) ‖ 응답 본문 T)                        -- 커밋마다 �
 
 가정: worker 간 왕복 p99 ≤ 1ms (같은 L2 대역), 200대 기준 Lua 실행 ≤ 0.5ms. 둘 다 M4 측정.
 
-| 구간 | 정상 p99 | WAIT 타임아웃 시 |
+| 구간 | 정상 p99 | WAIT 응답 지연 시 |
 |---|---|---|
 | ① 읽기 (왕복 1 + 실행) | 1.5ms | 1.5ms |
 | ② 메모리 판정 (정렬 · 점유 · 교착) | 1.0ms | 1.0ms |
 | ③ 커밋 (왕복 1 + 실행) | 1.5ms | 1.5ms |
-| ③ `WAIT` 대기 (replica ACK 왕복) | 1.0ms | **5.0ms** (타임아웃) |
+| ③ `WAIT` 대기 (replica ACK 왕복) | 1.0ms | **가드에서 끊음** — 서버 `WAIT 1 5`의 5ms는 목표일 뿐 상한이 아니다 |
 | 직렬화 · HTTP 처리 | 0.5ms | 0.5ms |
-| **합계** | **5.5ms** | **9.5ms** |
+| **합계** | **5.5ms** | **≤ 9.5ms** = 배치 시작 + 9ms 클라이언트 가드 + 직렬화 0.5ms |
 
-> 타임아웃을 넣고도 10ms 안이다. M4 측정에서 왕복이 가정보다 크면 WAIT 타임아웃을 3ms로 내린다.
-> 내려도 바뀌는 건 degraded 빈도뿐이다(C2).
+> **상한은 서버 타임아웃이 아니라 FleetController의 가드가 보장한다.** 서버 타임아웃이 늦게 와도 응답은 9.5ms 안에 나간다.
+> M4 측정에서 왕복이 가정보다 크면 가드와 WAIT 타임아웃을 함께 내린다. 바뀌는 건 degraded 빈도뿐이다(C2).
 
 | 결정 | 근거 |
 |---|---|
 | `WAIT`는 커밋과 **같은 연결**에서 | `WAIT`는 그 연결의 마지막 쓰기 오프셋을 기다린다. 다른 연결에서 부르면 즉시 0을 기다리고 끝난다 |
 | 커밋 전용 연결 2개(풀), 판정 경로 외 사용 금지 | `WAIT` 중인 연결은 서버에서 막혀 뒤 명령이 줄을 선다. 공용 멀티플렉서에 섞으면 다른 명령이 최대 타임아웃만큼 밀린다 |
-| 클라이언트 가드: 커밋 응답은 20ms, `WAIT` 응답은 배치 시작부터 9ms까지만 기다린다 | 서버 타임아웃이 늦게 와도 판정 응답이 밀리지 않게. 가드에 걸린 연결은 응답이 올 때까지 풀에서 뺀다 |
+| 클라이언트 가드: 커밋 응답은 20ms, `WAIT` 응답은 배치 시작부터 9ms까지만 기다린다 | p99 상한의 실제 근거. 가드에 걸린 연결은 `WAIT` 응답이 올 때까지 풀에서 뺀다 |
+| Redis `hz`는 기본값(10) 유지 | Redis 7.2 소스 확인: 블로킹 클라이언트 타임아웃은 `beforeSleep()`의 `handleBlockedClientsTimeout()`이 이벤트 루프마다 검사한다(`src/timeout.c`). 루프는 I/O나 시간 이벤트(`serverCron`, 주기 1/`hz`)에만 깨어난다(`src/ae.c` `usUntilEarliestTimer`). 다음 배치의 읽기 Lua가 같은 서버에 I/O를 일으켜 루프를 깨우므로, 가드에 걸린 `WAIT`는 다음 커밋 전에 풀린다. 응답 지연은 가드가 막으므로 `hz`를 올릴 이유가 없다 |
 
 ### `WAIT` 결과별 동작
 
@@ -210,10 +212,10 @@ sequenceDiagram
     A-->>S: 200 (digest d₂) · degraded++
     Note over S: 로봇 이동 적용, prev = (T, d₂)
     Note over P: P 다운 — T는 Q에 없음 (Q: wm T-1, wd d₁)
-    S->>B: tick T+1 (prev T, d₂)
-    B--xP: 연결 실패
-    B-->>S: 503
-    S->>A: 재전송(같은 본문) → 503 → 3회 소진
+    S->>A: tick T+1 (prev T, d₂)  — 성공 인스턴스 고정
+    A--xP: 연결 실패
+    A-->>S: 503
+    S->>B: 재전송(같은 본문) → 503 → 3회 소진
     Note over S: 틱 정지, 500ms마다 같은 본문 탐침
     Note over Q: Sentinel이 Q 승격
     S->>A: 탐침 tick T+1 (prev T, d₂)
@@ -222,7 +224,7 @@ sequenceDiagram
     A-->>S: 409 state_lost
     S->>B: reclaim (epoch E2, tick T, 전 로봇 위치)
     B->>Q: reclaim.lua → wm T, wd d0'
-    S->>A: tick T+1 (epoch E2, prev T, d0') → 정상 판정
+    S->>B: tick T+1 (epoch E2, prev T, d0') → 정상 판정 (409 후 B로 교대 · 고정)
 ```
 
 > Q 위에서 T+1이 판정되는 길은 재주장 뒤 하나뿐이고, 재주장은 Simulator의 실제 위치로 칸을 채운다.
@@ -241,9 +243,9 @@ sequenceDiagram
     S->>A: tick T
     A->>P: commit OK / WAIT 0
     A-->>S: 200 (d_T) · degraded
-    S->>B: tick T+1
-    B->>P: commit OK / WAIT 0
-    B-->>S: 200 (d_T+1) · degraded
+    S->>A: tick T+1
+    A->>P: commit OK / WAIT 0
+    A-->>S: 200 (d_T+1) · degraded
     Note over P: 3초 경과 → min-replicas 미충족, 쓰기 거부
     S->>A: tick T+2
     A->>P: read OK (P는 체인 보유) → commit
@@ -253,7 +255,7 @@ sequenceDiagram
     S->>B: 탐침 T+2 (prev T+1, d_T+1)
     B->>Q: read → LOST chain
     B-->>S: 409 → reclaim(E2) on Q → 재개
-    Note over A,P: A가 아직 옛 P에 붙어 있는 경우
+    Note over A,P: 이후 B가 실패해 A로 교대했는데 A가 아직 옛 P에 붙어 있는 경우
     S->>A: tick T+2 (epoch E2)
     A->>P: read → LOST epoch (P는 E1)
     A-->>S: 409 → 재주장 E3 → A 경유면 P가 NOREPLICAS → 503 → B 경유로 Q에 기록
@@ -328,14 +330,14 @@ end
 -- 여기부터 쓰기. 이후 실패 분기 없음
 if nDel > 0 then redis.call('HDEL', k, unpack(ARGV, i, i + nDel - 1)) end
 i = i + nDel
-local digest = redis.sha1hex(ARGV[4] .. '\n' .. ARGV[6])
+local digest = redis.sha1hex(ARGV[4] .. '\n' .. ARGV[5] .. '\n' .. ARGV[6])   -- prev ‖ reqHash ‖ 응답
 redis.call('HSET', k, 'wm', ARGV[2], 'wd', digest, 'rh', ARGV[5], 'rec', ARGV[6],
            unpack(ARGV, i, #ARGV))
 redis.call('PEXPIRE', k, ARGV[7])
 return {'OK', digest}
 ```
 
-`reclaim.lua` — 같은 `epoch` 재요청은 무변경.
+`reclaim.lua` — 같은 `epoch` 재요청은 무변경, 현재보다 오래된 `epoch`는 거부.
 
 ```lua
 #!lua
@@ -348,6 +350,7 @@ if m[1] == ARGV[1] then
   if m[2] == ARGV[3] then return {'DONE', m[3]} end
   return {'MISMATCH'}
 end
+if m[1] and ARGV[1] < m[1] then return {'STALE', m[1]} end   -- 지연 도착한 옛 재주장은 맵을 되감지 못한다
 local root = redis.sha1hex(ARGV[1] .. '\n' .. ARGV[3])
 redis.call('DEL', k)
 redis.call('HSET', k, 'epoch', ARGV[1], 'wm', ARGV[2], 'wd', root, 'wd0', root,
@@ -363,6 +366,7 @@ return {'OK', root}
 | 해제 | `ReleaseAsync`는 즉시 보내지 않고 **다음 배치의 `releases`** 에 싣는다 | 해제도 같은 원자 커밋 · 같은 체인에 들어간다. 별도 쓰기가 없으니 체인 밖 상태가 없다 |
 | `From` 불일치 | `r:` 의 현재 칸 ≠ 요청 `From` → `409 state_lost(from_mismatch)` | 불확실하면 정지 |
 | 응답 매핑 | `OK`/`DONE` → 200, `LOST`·`CONFLICT` → 409 `state_lost`, `MISMATCH` → 409 `batch_mismatch`, Redis 오류 → 503 | Simulator는 `batch_mismatch`도 재주장으로 처리한다(본문이 바뀐 재전송은 버그) |
+| 재주장 `STALE` | 현재보다 오래된 `epoch`의 재주장은 거부하고 현재 `epoch`를 돌려준다(응답 409 `stale_epoch`). Simulator는 이미 버린 시도면 무시한다. 자기가 발급하지 않은 더 새 `epoch`면(재시작 후 시계가 뒤로 간 경우) `max(현재 시각, 받은 epoch 시각 + 1ms)`로 새 UUIDv7을 만들어 다시 보낸다 | 늦게 도착한 옛 재주장이 맵을 되감아 불필요한 정지 · 재주장 1회를 만드는 경로를 없앤다 |
 | 스크립트 적재 | 기동 시 `SCRIPT LOAD`, `NOSCRIPT`면 1회 재적재 후 재시도 | 장애 조치 후 새 primary에는 스크립트 캐시가 없다 |
 
 ### 첫 처리 중 인스턴스가 죽는 모든 시점
@@ -406,7 +410,7 @@ FC-A가 tick T를 처리하다 죽거나 멈추고, Simulator가 같은 본문�
 | 시도 타임아웃 | **100ms** | 판정 p99 10ms의 10배. 배속 1에서 1틱 |
 | 시도 횟수 | **3** (최초 1 + 재시도 2) | 두 인스턴스에 각 1회 이상 + 1회 여유. 소진까지 최대 약 320ms |
 | 백오프 | 0ms → 20ms | 첫 재시도는 다른 인스턴스로 즉시 |
-| 대상 선택 | 틱마다 교대. 재시도는 **직전 실패 인스턴스 제외** | C6. headless Service DNS를 2초마다 갱신, 실패 시 마지막 목록 유지 |
+| 대상 선택 | **성공한 인스턴스에 고정**. 실패(타임아웃 · 연결 · 503) 또는 409일 때만 다른 인스턴스로 바꾼다 | C6. 틱마다 교대하면 분리 비대칭(§3)에서 두 저장소를 번갈아 밟아 재주장 핑퐁이 매 틱 난다. 고정하면 한쪽에서 안정된다. headless DNS 2초 갱신, 실패 시 마지막 목록 유지 |
 | 재시도 대상 오류 | 타임아웃, 연결 실패, 503 | 409는 재시도하지 않는다 → 재주장 |
 | 소진 시 | **틱 정지.** 500ms마다 같은 본문으로 탐침 | 30초 예산에서 탐침 지연 ≤ 0.5초 |
 | 409 | 재주장(`epoch` 새로 발급) → 성공 시 같은 tick을 새 `epoch` · `prev`로 판정 | 01 복구 절차 |
@@ -438,7 +442,7 @@ FleetController 쪽 짝 설정:
 |---|---|
 | 경로 입력 = `{mapId, mapVersion, start, startHeading, goal, congestion?}` | 07 제약. Redis를 읽지 않는다 |
 | `congestion`은 M4에서 생략(α=0), M7에서 `{alpha, snapshotId}` | 혼잡 가중을 2400칸 배열로 매번 보내지 않고 불변 스냅샷 id로 참조한다. 같은 id = 같은 가중 |
-| 경로 요청은 그 틱 판정을 보내지 **않은** 인스턴스로 | 계산 부하 분담이 2대의 존재 이유(07) |
+| 경로 요청은 판정 고정 인스턴스가 **아닌** 쪽으로 | 계산 부하 분담이 2대의 존재 이유(07). 판정을 고정해도 부하는 나뉜다 |
 | 인스턴스 로컬 LRU 캐시, 키 = 입력 전체, 4096개 | A*가 결정적(06 tie-break)이라 두 인스턴스의 캐시가 달라도 결과가 같다. 캐시는 속도에만 영향 |
 | `IPathPlanner`(동기)는 FleetController 안에서 그대로. Simulator 쪽은 비동기 배치 클라이언트 | 06 확장 지점 "M3 FleetController.Api 안으로 이동"의 구체화. A*·`PathResult`는 바뀌지 않는다 |
 | `IMoveArbiter` 시그니처 유지 | HTTP 구현이 `epoch` · `prev` · 해제 버퍼를 내부에 들고, 409 처리용 로봇 위치는 생성자로 받은 공급자에서 읽는다 |
@@ -475,7 +479,7 @@ FleetController 쪽 짝 설정:
 | `x-queue-type` | quorum | classic | 07 |
 | 초기 멤버 | M3: 1 → M5: 3 (`rabbitmq-queues grow`) | — (비복제) | 07. 타입은 선언 후 못 바꾼다 |
 | `x-single-active-consumer` | true | true | 01. quorum · classic 모두 지원 |
-| `x-queue-leader-locator` | balanced | balanced | 리더를 큐 수가 적은 노드에 |
+| 리더 배치 | 정책 `queue-leader-locator: balanced` | 정책 `queue-leader-locator: balanced` + `queue-master-locator: min-masters` | 리더를 큐 수가 적은 노드에. RabbitMQ 문서는 큐 인자(`x-`)보다 정책을 권한다. 문서상 새 키는 quorum · stream에 적용되고 classic은 옛 키를 계속 지원한다고만 되어 있어 classic에는 둘 다 건다. 3.13에서 선언 후 `rabbitmqctl list_queues name leader`로 분산 확인(M5) |
 | `x-delivery-limit` | **20** | — | 독 메시지가 파티션을 영원히 막지 않게. 워커 재시작 · 리더 교체로 인한 재전달을 견딜 만큼 넉넉히(4.0 기본값과 같음) |
 | `x-dead-letter-exchange` | `fleet.dlx` | — | DLQ 1개(`fleet.dlq`, quorum). 순서 불필요 |
 | `x-dead-letter-strategy` | at-least-once | — | 데드레터링 중 유실 0. `reject-publish`가 전제 |
@@ -556,14 +560,14 @@ telemetry만 있는 배치는 항상 `done`이다.
 
 | 노드 | 주소(예시) | 역할 | 사양 | 설정 |
 |---|---|---|---|---|
-| cp-1 | 192.168.10.10 | k3s server 전용 | 2 vCPU · 4GB | `--node-taint node-role.kubernetes.io/control-plane=true:NoSchedule` |
-| worker-1 | 192.168.10.11 | 애플리케이션 · PostgreSQL · Redis/Sentinel/RabbitMQ 멤버 | 아래 §11 | 레이블 `fleet/pg=true` |
+| cp-1 | 192.168.10.10 | k3s server 전용 | 2 vCPU · 2GB | `--node-taint node-role.kubernetes.io/control-plane=true:NoSchedule` |
+| worker-1 | 192.168.10.11 | 애플리케이션 · PostgreSQL · Redis/Sentinel/RabbitMQ 멤버 | 4 vCPU · 6GiB | 레이블 `fleet/pg=true` |
 | worker-2 | 192.168.10.12 | 애플리케이션 · Redis/Sentinel/RabbitMQ 멤버 | 〃 | |
 | worker-3 | 192.168.10.13 | 애플리케이션 · 모니터링 · Redis/Sentinel/RabbitMQ 멤버 | 〃 | |
 
 | 결정 | 근거 |
 |---|---|
-| cp-1 4GB | k3s server 권장 최소 2GB에 etcd(sqlite) · API 서버 여유. 워크로드가 없으니 request 계산에서 뺀다 |
+| cp-1 2GB | k3s 공식 요구 사항의 server 최소치(2 CPU · 2GB)다. 저장소는 내장 SQLite(kine)라 etcd 메모리가 없고, taint로 워크로드가 없어 API 서버 · 스케줄러 · 컨트롤러만 돈다. request 계산에서 뺀다 |
 | cp-1 taint, 허용은 DaemonSet(node_exporter 등)만 | 07. 데이터 계층 과반 계산이 worker 3대만으로 닫힌다 |
 | PostgreSQL은 레이블로 고정 | 호스트명 대신 `fleet/pg=true` — worker 교체 시 레이블만 옮긴다. PV의 nodeAffinity는 호스트명(worker-1) |
 
@@ -624,7 +628,7 @@ Redis 역할 결정(init):
 
 ## 11. 리소스 표 근거
 
-표 자체는 02 "고가용성 구성 (M5 + M6)". **worker 3대 메모리 합계 16GB 기준**, 합계 **request 7.9Gi (EventWorker 8대 최대) ≤ 8Gi**,
+표 자체는 02 "고가용성 구성 (M5 + M6)". **worker 1대 6GiB × 3**, 합계 **request 7.9Gi (EventWorker 8대 최대) ≤ 8Gi**,
 limit = request × 2. cp-1은 계산에서 뺀다(§10).
 
 | 결정 | 근거 |
@@ -633,18 +637,34 @@ limit = request × 2. cp-1은 계산에서 뺀다(§10).
 | Sentinel 32Mi | 상태가 거의 없는 프로세스. 실측 10Mi 안팎 |
 | RabbitMQ 512Mi (limit 1Gi) | quorum 32 + WAL 64MB 제한. 워터마크 0.6이 limit 안에서 역압을 건다 |
 | Redis 256Mi (limit 512Mi) | `maxmemory` 192mb + AOF rewrite fork 여유 |
-| kube-system · k3s agent 제외 | request가 아닌 실사용으로 worker당 0.3~0.5GiB. 16GB에서 request 8Gi를 뺀 나머지가 이것과 limit 버스트를 받는다 |
+| worker 시스템 예약 0.6Gi | OS + k3s agent + kube-proxy · flannel · node_exporter 실사용. k3s 설치 시 `--kubelet-arg=system-reserved=memory=600Mi`로 명시해 allocatable을 **5.4Gi**로 고정 |
 | MinIO 제외 | 선택 항목. 쓰면 그만큼 EventWorker 최대를 줄인다 |
+| Prometheus는 worker-3 local-path PVC | 보존 7일 데이터를 노드에 둔다. worker-3 장애 시 Pending(모니터링 정지 — §10 과반 표와 같음) |
 
-worker별 request (EventWorker 2대 기준, worker당 약 5.3GB):
+### 정상 시 worker별 request
 
-| 노드 | 배치 | request |
-|---|---|---|
-| worker-1 | Redis · Sentinel · RabbitMQ · PostgreSQL · Simulator · nginx | 1.9Gi |
-| worker-2 | Redis · Sentinel · RabbitMQ · FleetController · IngestApi · EventWorker · QueryApi | 1.7Gi |
-| worker-3 | Redis · Sentinel · RabbitMQ · FleetController · IngestApi · EventWorker · Prometheus · Grafana | 2.8Gi |
+| 노드 | 배치 | EventWorker 2 | EventWorker 8 | + 시스템 0.6Gi (≤ 6GiB) |
+|---|---|---|---|---|
+| worker-1 | Redis · Sentinel · RabbitMQ · PostgreSQL · Simulator · nginx (+ EventWorker 증설 3) | 1.9Gi | 2.7Gi | 3.3Gi |
+| worker-2 | Redis · Sentinel · RabbitMQ · FleetController · IngestApi · EventWorker · QueryApi (+ 증설 3) | 1.7Gi | 2.5Gi | 3.1Gi |
+| worker-3 | Redis · Sentinel · RabbitMQ · FleetController · IngestApi · EventWorker · Prometheus · Grafana | 2.8Gi | 2.8Gi | 3.4Gi |
+| **합계** | | **6.4Gi** | **7.9Gi** | |
 
-EventWorker 증설분(6 × 256Mi)은 스케줄러가 worker-1 · worker-2로 채운다. 최대일 때 worker당 2.6~2.8Gi.
+### worker 1대 장애 시 재배치 (EventWorker 8대, 최악)
+
+남은 2대 용량 = 2 × 5.4Gi = **10.8Gi**. 그 worker의 데이터 멤버(Redis · Sentinel · RabbitMQ 0.8Gi)는 local PV · required anti-affinity로
+**의도적으로 Pending**이고 재배치 대상이 아니다.
+
+| 장애 | 재배치할 pod | 재배치 request | 남은 2대 request 합 | ≤ 10.8Gi | 한 노드 최대 (≤ 5.4Gi) | Pending |
+|---|---|---|---|---|---|---|
+| worker-1 | Simulator · nginx · EventWorker 3 | 1.4Gi | 6.6Gi | ✓ | worker-2에 몰아도 3.8Gi | 데이터 멤버, **PostgreSQL**(worker-1 고정, 07 범위 밖) |
+| worker-2 | FleetController · IngestApi · QueryApi · EventWorker 4 | 1.7Gi | 7.1Gi | ✓ | worker-1에 몰아도 4.3Gi | 데이터 멤버 |
+| worker-3 | FleetController · IngestApi · EventWorker · Grafana | 1.0Gi | 6.1Gi | ✓ | worker-1에 몰아도 3.7Gi | 데이터 멤버, **Prometheus**(local-path PVC) |
+
+> 애플리케이션 pod는 어느 worker가 빠져도 전부 재배치된다. EventWorker HPA 상한 8은 그대로 둔다.
+> Pending은 설계상 노드에 묶인 것(데이터 멤버 · PostgreSQL · Prometheus)뿐이다.
+
+CPU는 worker당 4 vCPU를 가정한다. request 합 최대 6.15 core, worker 1대 장애 후 남은 8 vCPU 안이다(M5 확인).
 
 ---
 
@@ -692,7 +712,7 @@ FleetController 배치 처리 중 kill은 시점을 고정해야 재현된다. �
 | 16 | monitoring 상자 | `node-3` | `worker-3` |
 | 17 | 화살표 FleetController → Redis | `락 · 상태 · Lua 1회/배치` | `읽기 1 + 커밋 1 (+WAIT 1)/배치` |
 | 18 | 화살표 | 없음 | 점선 `Sentinel → FleetController · IngestApi : primary 탐색` |
-| 19 | 화살표 Simulator → FleetController | `① 배치 이동 판정 · HTTP 동기 · 틱당 1건` | 뒤에 `· headless · 틱마다 교대 · 재전송` 추가 |
+| 19 | 화살표 Simulator → FleetController | `① 배치 이동 판정 · HTTP 동기 · 틱당 1건` | 뒤에 `· headless · 실패 시 교대 · 재전송` 추가 |
 | 20 | 범례 | 4종 | `required anti-affinity`(데이터 계층) / `preferred`(FleetController) 표기 2종 추가 |
 | 21 | 리소스 숫자 | 02 최소 구성 기준 | 02 "고가용성 구성" 표 기준으로 갱신 (Redis 100m/256Mi, Sentinel 50m/32Mi, RabbitMQ 300m/512Mi) |
 | 22 | 바닥글 | `docs/02 · docs/01 기준` | `docs/01 · 02 · 07 · 08 기준` |
@@ -753,7 +773,7 @@ FleetController 배치 처리 중 kill은 시점을 고정해야 재현된다. �
 
 ### M5 — k3s 배포 (cp-1 + worker 3)
 
-- [ ] [단순 S1] `deploy/k3s/storage/local-pv.yaml`, `storageclass.yaml`, `deploy/k3s/install/{cp-1,worker}.sh` — §10 PV 10개, cp-1 taint · worker 조인 · `fleet/pg` 레이블
+- [ ] [단순 S1] `deploy/k3s/storage/local-pv.yaml`, `storageclass.yaml`, `deploy/k3s/install/{cp-1,worker}.sh` — §10 PV 10개, cp-1 taint · worker 조인(system-reserved 600Mi) · `fleet/pg` 레이블
 - [ ] [단순 S2] `deploy/k3s/redis/{redis-sts,sentinel-sts,configmap,pdb,services}.yaml` — required anti-affinity, §1 설정
 - [ ] [단순 S3] `deploy/k3s/rabbitmq/{sts,configmap,pdb,rbac,services}.yaml`, `scripts/rabbitmq-grow.sh` — §8 브로커 설정, grow · rebalance
 - [ ] [단순 S4] `deploy/k3s/apps/{fleet-controller,ingest-api,event-worker,query-api,simulator}.yaml`, `deploy/k3s/system/coredns-patch.yaml` — 02 리소스 표, preferred anti-affinity, headless Service, PDB, `preStop`

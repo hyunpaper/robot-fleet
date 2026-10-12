@@ -571,7 +571,7 @@ ack 전 메시지 재전달. 세 경우 모두 **같은 `eventId`가 두 번 온
 
 | 구간 | 방식 | 이유 |
 |---|---|---|
-| Simulator → FleetController | HTTP 동기, **틱당 배치 1건**. headless Service, 틱마다 교대, 실패 시 다른 인스턴스로 재전송 | 즉답 필요 (이동 승인). 건별 호출은 틱 예산 초과 (08 §5) |
+| Simulator → FleetController | HTTP 동기, **틱당 배치 1건**. headless Service, 성공 인스턴스 고정 · 실패 시 다른 인스턴스로 재전송 | 즉답 필요 (이동 승인). 건별 호출은 틱 예산 초과 (08 §5) |
 | FleetController ↔ Redis | TCP, Sentinel 경유. 배치당 읽기 Lua 1회 + 커밋 Lua 1회(+`WAIT 1`) | 저지연 상태 조회, 판정 기록 원자화 (08 §2) |
 | Simulator → IngestApi | HTTP 배치, 틱당 1건, 순차 송신 | 그 틱의 모든 이벤트를 묶어 전송. 유일한 이벤트 발행 경로 |
 | IngestApi → RabbitMQ | AMQP | 비동기 분리 |

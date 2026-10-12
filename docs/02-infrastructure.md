@@ -46,7 +46,7 @@ curl -sfL https://get.k3s.io | sh -s - --disable traefik --disable servicelb \
 sudo cat /var/lib/rancher/k3s/server/node-token
 
 curl -sfL https://get.k3s.io | K3S_URL=https://192.168.10.10:6443 \
-  K3S_TOKEN=<token> sh -
+  K3S_TOKEN=<token> sh -s - --kubelet-arg=system-reserved=memory=600Mi
 
 # PostgreSQL 고정 레이블
 kubectl label node worker-1 fleet/pg=true
@@ -96,7 +96,7 @@ ingress-nginx nginx ingress controller
 
 ### 고가용성 구성 (M5 + M6)
 
-worker 3대 메모리 합계 16GB 기준. cp-1(2 vCPU · 4GB)은 워크로드가 없어 표에서 뺀다. 근거와 worker별 배치는 08 §11.
+worker 1대 4 vCPU · 6GiB × 3. cp-1(2 vCPU · 2GB)은 워크로드가 없어 표에서 뺀다. worker별 배치와 1대 장애 시 재배치 계산은 08 §11.
 
 | 컴포넌트 | replicas | CPU request | Memory request | Memory limit | 합계 request |
 |---|---|---|---|---|---|
@@ -114,14 +114,14 @@ worker 3대 메모리 합계 16GB 기준. cp-1(2 vCPU · 4GB)은 워크로드가
 | Grafana | 1 | 100m | 256Mi | 512Mi | 256Mi |
 | **합계** | | **4.35 core (최대 6.15)** | | | **6.4Gi (EventWorker 8대 시 7.9Gi)** |
 
-> request 합 8Gi 이하, limit = request × 2. kube-system · k3s agent 실사용과 limit 버스트는 나머지 8GB가 받는다.
+> request 합 8Gi 이하, limit = request × 2. worker마다 시스템 예약 600Mi를 빼면 allocatable 5.4Gi. 정상 시 worker별 request 최대 2.8Gi, worker 1대 장애 후에도 남은 2대에 애플리케이션 pod가 모두 재배치된다(최대 4.3Gi). Pending은 노드에 묶인 데이터 멤버 · PostgreSQL · Prometheus뿐 (08 §11).
 
 ### 서버 요구사항
 
 | 구성 | 메모리 | 가능 범위 |
 |---|---|---|
 | 단일 노드 | 8GB | 최소 구성 + 모니터링. 데이터 계층 단일 인스턴스 |
-| **cp-1 + worker 3** | cp-1 4GB + **worker 합계 16GB** | **고가용성 구성 + 모니터링 + 부하 시험** |
+| **cp-1 + worker 3** | cp-1 2GB + **worker 6GiB × 3** | **고가용성 구성 + 모니터링 + 부하 시험** |
 
 > **limit을 request의 2배로 잡는 이유** — .NET은 GC 특성상 순간적으로 메모리를
 > 더 쓸 수 있다. limit이 request와 같으면 OOMKilled가 자주 발생한다.
