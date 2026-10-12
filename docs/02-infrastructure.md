@@ -28,7 +28,7 @@ curl -sfL https://get.k3s.io | sh -s - \
 | 구성 | 조건 | 비고 |
 |---|---|---|
 | 단일 노드 | 서버 1대, VM 불가 | 시작 가능. pod 스케일 아웃 시연은 됨 |
-| **멀티 노드** | VM 2~3개 가능 | **권장** — 노드 장애 시연 가능 |
+| **3노드** | VM 3개 | **권장** — 노드 장애 시연 가능. Redis Sentinel·RabbitMQ quorum의 과반 합의에 3노드가 필요하다 (07) |
 
 멀티 노드 구성 시
 
@@ -83,19 +83,16 @@ ingress-nginx nginx ingress controller
 | Prometheus | 300m | 1Gi | 보존 기간 7일 기준 |
 | Grafana | 100m | 256Mi | |
 
-### RabbitMQ 3노드 전환 (M8)
+### 고가용성 구성 (M5)
 
-| | CPU | Memory |
-|---|---|---|
-| RabbitMQ × 3 | 900m | 1.5Gi |
+Redis ×3 + Sentinel ×3, RabbitMQ ×3을 세 노드에 분산한다. 상세 리소스 표는 07 위임 항목에 따라 갱신한다.
 
 ### 서버 요구사항
 
 | 서버 메모리 | 가능 범위 |
 |---|---|
-| 4GB | 최소 구성만. 모니터링 빠듯 |
-| **8GB** | **최소 구성 + 모니터링 + 여유** |
-| 16GB | 전체 + MQ 3노드 + 부하 시험 동시 |
+| 8GB | 최소 구성 + 모니터링. 데이터 계층 단일 인스턴스 |
+| **16GB** | **고가용성 구성 + 모니터링 + 부하 시험** |
 
 > **limit을 request의 2배로 잡는 이유** — .NET은 GC 특성상 순간적으로 메모리를
 > 더 쓸 수 있다. limit이 request와 같으면 OOMKilled가 자주 발생한다.
@@ -174,9 +171,9 @@ k3s 기본 `local-path`는 노드 로컬 디렉터리를 쓴다. **노드가 바
 
 | 데이터 | 전략 |
 |---|---|
-| PostgreSQL | 전용 노드에 고정(`nodeSelector`) + hostPath 또는 local PV |
-| RabbitMQ | 동일 |
-| Redis | 캐시 성격이므로 유실 허용 가능. AOF는 끄거나 everysec |
+| PostgreSQL | node-1 고정(`nodeSelector`) + local PV |
+| RabbitMQ | 3노드에 1개씩. 노드마다 local PV (07) |
+| Redis | 3노드에 1개씩. 캐시 성격이므로 유실 허용, 복구는 Simulator 재주장 (01·07) |
 | MinIO | 용량 큰 디스크 경로 지정 |
 
 ```yaml
@@ -359,9 +356,11 @@ HPA의 `stabilizationWindowSeconds`는 scaleDown 300초로 둔다. 재배정마�
 | 워커 pod 강제 종료 | `kubectl delete pod event-worker-xxx` | 메시지 유실 0, 재처리 시 중복 없음 |
 | RabbitMQ 재시작 | `kubectl rollout restart sts/rabbitmq` | 재연결, persistent 메시지 보존 |
 | Redis 플러시 | `redis-cli FLUSHDB` | `409 state_lost` → Simulator 틱 정지 → 락 재주장 → 재개 (01 "Redis 상태 소실 복구"). 복구 중 로봇 겹침 0 |
-| 노드 drain | `kubectl drain node-2` | pod 재배치, 서비스 유지 |
+| 노드 drain | `kubectl drain node-2` | pod 재배치, 서비스 유지. 그 노드의 Redis·RabbitMQ 멤버 장애 조치 포함 |
 | 네트워크 지연 | `tc qdisc add ... delay 200ms` | 이동 판단 지연 시 동작 |
 | DB 연결 끊김 | NetworkPolicy로 차단 | readiness 실패, liveness 유지 |
+
+Redis primary·RabbitMQ leader·FleetController 1대 종료 시나리오는 07 위임 항목에 따라 추가한다.
 
 **각 시나리오마다 Grafana 스크린샷과 결과를 문서로 남긴다.**
 포트폴리오에서 "장애를 가정해 설계했다"의 근거가 된다.

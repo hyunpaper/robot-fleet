@@ -35,11 +35,11 @@
 | M1 | 맵 로드·검증, A* 경로 탐색(회전 비용 포함), 단일 로봇 시뮬레이션 | 완료 |
 | M2 | 다중 로봇, 충돌 회피, 교착 탐지·해소 | 진행 중 |
 | M3 | Ingest API + RabbitMQ + Worker로 이벤트 파이프라인 분리 | |
-| M4 | 락·상태·멱등 키를 Redis로 이전, 관제 서버 다중 인스턴스 | |
-| M5 | k3s 배포, nginx ingress, 스케일 아웃 | |
+| M4 | 락·상태·멱등 키를 Redis로 이전, 관제 서버 2대(재전송 멱등, 장애 조치 감지) | |
+| M5 | k3s 배포, nginx ingress, Redis Sentinel·RabbitMQ 3노드, 스케일 아웃 | |
 | M6 | Prometheus + Grafana, 실시간 관제 화면 | |
 | M7 | 실험: 로봇 수별 처리량, 회피 전략·우선순위 정책 비교 | |
-| M8 | 장애 주입: pod 강제 종료, 브로커 재시작, 네트워크 지연 | |
+| M8 | 장애 주입: pod 강제 종료, Redis·브로커 장애 조치, 노드 drain, 네트워크 지연 | |
 | M9 | 교착 분석 에이전트: 원인 진단, 수정안 생성, 승인 후 자동 배포 | |
 
 ---
@@ -84,6 +84,7 @@ Simulator ──(틱마다 배치 이동 요청)──► FleetController ◄─
 | [04-algorithm](docs/04-algorithm.md) | A*, 충돌 유형, 락 전략, 교착 탐지·해소 |
 | [05-metrics](docs/05-metrics.md) | 지표 정의, 실험 설계 |
 | [06-m1-design](docs/06-m1-design.md) | M1 상세 설계와 테스트 목록 |
+| [07-high-availability](docs/07-high-availability.md) | 관제 서버 2대, Redis Sentinel, RabbitMQ quorum queue, 3노드 분산 |
 
 ---
 
@@ -123,6 +124,8 @@ Simulator ──(틱마다 배치 이동 요청)──► FleetController ◄─
 
 | 노드 | 주소 | 역할 |
 |---|---|---|
-| node-1 | 192.168.10.11 | control plane, PostgreSQL, RabbitMQ |
-| node-2 | 192.168.10.12 | 애플리케이션 |
-| node-3 | 192.168.10.13 | 애플리케이션, 모니터링 |
+| node-1 | 192.168.10.11 | control plane, PostgreSQL, Redis·RabbitMQ 멤버 |
+| node-2 | 192.168.10.12 | 애플리케이션, Redis·RabbitMQ 멤버 |
+| node-3 | 192.168.10.13 | 애플리케이션, 모니터링, Redis·RabbitMQ 멤버 |
+
+Redis(primary 1 + replica 2 + Sentinel 3)와 RabbitMQ(3노드, quorum queue)는 세 노드에 분산된다. → 07
