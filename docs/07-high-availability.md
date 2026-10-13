@@ -11,7 +11,7 @@
 | 애플리케이션 pod 1개 종료 (FleetController · IngestApi · EventWorker · QueryApi) | 서비스 유지 | replicas ≥ 2 + 재전송 멱등 |
 | Redis primary 다운 | 틱 일시 정지 후 재개. 로봇 겹침 0 | Sentinel 장애 조치 + 상태 재주장 |
 | RabbitMQ 노드 1개 다운 | task · conflict 유실 0. telemetry 일부 유실 | quorum queue |
-| 노드 1개 다운 · drain (node-1~3 어느 것이든) | 위 셋이 동시에 일어나도 유지. node-1이면 스케줄링 · 재배치도 멈추되 기동 중인 pod는 유지 | 데이터 계층 3노드 분산 |
+| 노드 1개 다운 · drain (node-1~3 어느 것이든) | 위 셋이 동시에 일어나도 유지. node-1이면 스케줄링 · 재배치도 멈추되 기동 중인 pod는 유지하고, Simulator는 node-1 밖에 있어 틱이 이어진다 | 데이터 계층 3노드 분산, Simulator node-1 회피 |
 
 ### 범위 밖
 
@@ -112,6 +112,7 @@ node-1 장애 시 API 서버가 함께 내려간다는 제약을 받아들인다
 | Redis ×3, Sentinel ×3, RabbitMQ ×3 | 노드당 1개, **required anti-affinity** | 노드 하나가 죽어도 과반이 남는다 |
 | PostgreSQL ×1 | node-1 고정 + local PV(Retain) | 범위 밖. 단일 유지 |
 | FleetController ×2 | 서로 다른 노드, preferred anti-affinity | 노드 장애에 둘 다 죽지 않게 |
+| Simulator ×1 | **node-1을 피한다** (required nodeAffinity `NotIn node-1`), node-2 · 3 중 어디든 | node-1에는 이미 k3s server · PostgreSQL이 있다. Simulator까지 두면 node-1 장애 때 틱이 멈추고 API 서버도 함께 내려가 재배치조차 안 된다. node-2 · 3에 두면 그 노드가 죽어도 API 서버가 살아 있어 다른 노드로 재시작된다(새 epoch, 범위 밖 항목 그대로) |
 | 나머지 애플리케이션 · 모니터링 | 세 노드 모두 허용 | "node-2 / node-3만" 제한 폐기. 모니터링은 상시 |
 
 Redis · RabbitMQ 멤버는 세 노드 전부에 있고, 노드별 차이는 k3s server · PostgreSQL · 모니터링이 어디에 붙느냐뿐이다.
@@ -119,7 +120,7 @@ Redis · RabbitMQ 멤버는 세 노드 전부에 있고, 노드별 차이는 k3s
 
 | 노드 | 사양 | 근거 |
 |---|---|---|
-| node-1~3 | 각 **2 vCPU · 8GiB** | 시스템 예약 0.6Gi를 뺀 7.4Gi에 request 최대 2.28Gi(합 6.16Gi, 모니터링 포함). 1대가 빠져도 남은 2대에 앱 pod 전부 재배치, 노드당 2.3~2.7Gi. 제약은 메모리가 아니라 **CPU**(호스트 6코어) — EventWorker HPA 상한 3의 이유 (08 §11) |
+| node-1~3 | 각 **2 vCPU · 8GiB** | 시스템 예약 0.6Gi를 뺀 7.4Gi에 request 합 6.16Gi(모니터링 포함), 노드당 2.3Gi 안팎. 1대가 빠져도 남은 2대에 앱 pod 전부 재배치되고 노드당 3Gi를 넘지 않는다. 제약은 메모리가 아니라 **CPU**(호스트 6코어) — EventWorker HPA 상한 3의 이유. 노드별 수치는 08 §11 |
 
 ---
 
@@ -187,3 +188,4 @@ Redis · RabbitMQ 멤버는 세 노드 전부에 있고, 노드별 차이는 k3s
 | 사용자 확정 (갱신) | 노드 구성 cp-1 + worker-1~3 → **node-1~3 (3대)** | 전용 control plane 제거. 과반 구성 동일, node-1이 k3s server 겸임 (위 "노드 구성", 02) |
 | 사용자 확정 (갱신) | worker 6GiB × 3 + cp-1 2GB, CPU 4 vCPU 가정 → **2 vCPU · 8GiB × 3** | 로컬 호스트 64GB · 6코어. 모니터링 상시 유지. CPU가 유일한 제약이라 EventWorker HPA 상한 3. 08 §11 리소스 표가 기준 |
 | 사용자 확정 (갱신) | 자체 리눅스 서버 → **집 PC VMware VM 3대** (M7 부하 실험만 AWS) | 매니지드 데이터 서비스는 계속 쓰지 않는다. 02 환경 절 |
+| 총괄 결정 | Simulator는 node-1을 피한다 | k3s server · PostgreSQL과 같은 노드에 두면 node-1 장애가 "틱 정지 + 재배치 불가"가 된다. node-2 · 3에 두면 node-1 장애에도 틱이 이어지고, node-2 · 3 장애는 재시작(새 epoch)으로 끝난다. 08 §10 · §11 배치 · 수치 갱신 |
