@@ -17,7 +17,7 @@ public sealed record TaskHistoryChange(
 public sealed record ConflictLogChange(
     string EventId, string RunId, string MapId, long Tick, short ConflictType, short? X, short? Y,
     IReadOnlyList<string> RobotIds, short? Resolution, int? WaitMs, int? ResolvedMs,
-    string? YieldRobotId, short? YieldToX, short? YieldToY, DateTimeOffset OccurredAt);
+    string? YieldRobotId, short? YieldToX, short? YieldToY, short? SearchedDistance, DateTimeOffset OccurredAt);
 
 /// replan_log 한 줄. reason 코드는 01 주석(blocked / deadlock / map_changed)
 public sealed record ReplanChange(
@@ -77,12 +77,12 @@ public static class StoreMapping
             return new ConflictLogChange(row.EventId, row.RunId, row.MapId, row.Tick, 3, (short?)first?.X, (short?)first?.Y,
                 d.Cycle, ResolutionCode(d.Resolution), null, d.ResolvedMs,
                 hasYield ? d.YieldRobotId : null, hasYield ? (short)d.YieldToX : null, hasYield ? (short)d.YieldToY : null,
-                row.OccurredAt);
+                (short)d.SearchedDistance, row.OccurredAt);
         }
 
         var c = Read<ConflictDetectedPayload>(row.Payload);
         return new ConflictLogChange(row.EventId, row.RunId, row.MapId, row.Tick, ConflictTypeCode(c.ConflictType), (short)c.X,
-            (short)c.Y, c.RobotIds, ResolutionCode(c.Resolution), c.WaitMs, null, null, null, null, row.OccurredAt);
+            (short)c.Y, c.RobotIds, ResolutionCode(c.Resolution), c.WaitMs, null, null, null, null, null, row.OccurredAt);
     }
 
     public static ReplanChange ToReplan(ReplanRow row)

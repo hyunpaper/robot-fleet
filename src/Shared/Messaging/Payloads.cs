@@ -22,7 +22,7 @@ public sealed record ConflictDetectedPayload(string ConflictType, int X, int Y, 
     string WinnerRobotId, string Resolution, int WaitMs);
 
 public sealed record DeadlockDetectedPayload(IReadOnlyList<string> Cycle, IReadOnlyList<CellDto> Cells,
-    string Resolution, string YieldRobotId, int YieldToX, int YieldToY, int ResolvedMs);
+    string Resolution, string YieldRobotId, int YieldToX, int YieldToY, int SearchedDistance, int ResolvedMs);
 
 public sealed record PathReplannedPayload(string RobotId, string? TaskId, string Reason, int OldLength,
     int NewLength, double ComputeMs);

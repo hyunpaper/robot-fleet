@@ -331,6 +331,8 @@ public class SimulationLoopTests
             Released.Add(cell);
             return ValueTask.CompletedTask;
         }
+
+        public IReadOnlyList<DeadlockInfo> DrainPendingDeadlocks(string mapId, long tick) => Array.Empty<DeadlockInfo>();
     }
 
     private sealed class RecordingDelay : ITickDelay

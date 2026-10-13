@@ -169,5 +169,8 @@ public class MultiRobotTests
 
         public ValueTask ReleaseAsync(string mapId, string robotId, Point cell, CancellationToken ct = default)
             => inner.ReleaseAsync(mapId, robotId, cell, ct);
+
+        public IReadOnlyList<DeadlockInfo> DrainPendingDeadlocks(string mapId, long tick)
+            => inner.DrainPendingDeadlocks(mapId, tick);
     }
 }

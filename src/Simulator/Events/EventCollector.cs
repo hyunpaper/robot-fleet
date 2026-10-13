@@ -52,6 +52,12 @@ public sealed class EventCollector
 
     public void Conflict(string robotId, ConflictDetectedPayload p) => Add(robotId, 0, Item(EventType.ConflictDetected, p));
 
+    /// DeadlockDetected(13 §7). 충돌과 같은 묶음(rank 0). 본문은 2단계 S2
+    public void Deadlock(string robotId, DeadlockDetectedPayload p) => throw new NotImplementedException();
+
+    /// PathReplanned(13 §7). rank 0. 본문은 2단계 S2
+    public void Replan(string robotId, PathReplannedPayload p) => throw new NotImplementedException();
+
     public void Status(string robotId, RobotStatus from, RobotStatus to, string reason)
     {
         if (!StatusTransitions.IsAllowed(from, to, reason))

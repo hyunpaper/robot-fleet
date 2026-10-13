@@ -69,6 +69,12 @@ public interface IMoveArbiter   // 기존 메서드 유지 + 종료 마무리 �
 }
 ```
 
+| 호출 규약 | 결정 | 근거 |
+|---|---|---|
+| 호출 지점 | `FleetSimulation` **종료 경로 한 곳**, `SimulationEnded` 발행보다 **먼저**. run 도중 호출 금지 | 드레인은 종료 마무리다. 도중에 부르면 살아 있는 교착을 failed로 잘못 닫는다 |
+| 멱등 | 재호출 시 **같은 목록** 반환(빈 목록 금지) | M4 HTTP 재시도 시 유실 방지(08 §4 원칙). 한 번 failed로 확정한 교착은 상태에 남겨 다시 같은 목록을 준다 |
+| M4 순서 | run 전환 시 **맵 해시 초기화·epoch 증가(02 run 관리 4단계)보다 앞** | 초기화가 먼저면 드레인 대상이 사라진다 |
+
 ---
 
 ## 3. 대기 그래프와 순환 탐지
@@ -162,6 +168,10 @@ public static class YieldSearch   // 순수, 테스트
 5. 중재기가 점유로 양보 로봇의 회피 지점 도착을 감지 → 그 틱 응답 Deadlock = {Resolved, resolvedMs, IsNew=true}. Simulator가 DeadlockDetected(yield) 1회 발행
 6. 양보 로봇은 **순환의 다른 로봇이 순환 칸을 벗어난 뒤** 원래 목적지로 재계획(PathReplanned deadlock). 나머지는 path_cleared 또는 재계획
 ```
+
+> **회피 지점 대기 생존성 상한(§5-6).** 순환의 다른 로봇이 그 칸에서 작업에 진입하는 등으로 **끝내 안 벗어날 수 있다.** 그래서
+> 양보 로봇은 Resolved 이후 `deadlock_resolve_ttl_ticks`가 지나도 순환 칸이 안 비면 **그냥 원래 목적지로 재계획**한다(막은 칸을
+> 장애물로, §6-a). 이 재계획도 `replan_max_per_task` 상한에 센다 — 영원히 회피 지점에 매달리지 않는다.
 
 ### 발행 시점과 누락 경로 (완결성)
 
@@ -310,6 +320,11 @@ public sealed record DeadlockOptions   // 04 설정값 9~13
 
 > 03은 `replan_exceeded`를 TaskFailed 사유에 더하는 **한 줄**만 바뀐다(전이·`deadlock_unresolved`는 이미 있음). 04·01 문서·기본값·안전성 불변식은 바꾸지 않는다. 위 구현 판단들이 리뷰 대상이다.
 
+> **`failed` 두 뜻 구분.** TTL 만료로 닫힌 failed는 **`yield_robot_id`가 있다**(양보를 시작했으나 못 끝냄). 회피 지점이 아예
+> 없어 닫힌 failed는 **`yield_robot_id`가 NULL**(§5 failed, P1-2). 그래서 M9 `no_yield_point` 판정은
+> **"`resolution = failed` AND `yield_robot_id IS NULL`"**이다 — `searchedDistance = 상한`으로만 가르면 확대 범위 끝에서
+> 찾아 양보까지 간 경우(TTL 만료 failed)를 오분류한다. 03 `no_yield_point` 입력(04 M9)에 이 조건을 적용.
+
 ---
 
 ## 11. 테스트 (순수 로직 — 실제 판정이라 인프라 없이 돈다)
@@ -336,17 +351,38 @@ public sealed record DeadlockOptions   // 04 설정값 9~13
 
 ## 12. 작업 분할
 
-`[핵심]` = 중간 관리자. `[단순 S1~S4]` = 하위(Sonnet), 파일 겹침 없음. 선행 묶음은 10 §13처럼 **시그니처 껍데기**에 맞춰 쓴다.
+`[핵심]` = 중간 관리자. `[단순 S1~S4]` = 하위(Sonnet), 파일 겹침 없음. 두 단계로 간다.
 
-| 묶음 | 파일 | 내용 | 선행 |
+### 1단계 — [핵심] 껍데기 커밋 (먼저)
+
+S1~S4가 참조할 **시그니처를 먼저 커밋**한다(10 §13 2차 패턴). 본문은 `NotImplementedException`(또는 빈 반환)이고, `searched_distance` 적재 체인만 상관성이 커 통째로 실제 구현한다. 1단계 완료 조건 = build 경고 0·test 실패 0·format 통과.
+
+| 껍데기 | 내용 |
+|---|---|
+| `Arbitration/MoveDecision.cs` | `DeadlockPhase` enum, `DeadlockInfo` record, `MoveDecision.Deadlock` 선택 필드(기본 null) — 타입 완결, 본문 없음 |
+| `Arbitration/IMoveArbiter.cs` + `InMemoryMoveArbiter`·`AlwaysGrantMoveArbiter` | `DrainPendingDeadlocks(mapId, tick)` 시그니처 + **빈 목록** 반환(2단계에서 실제 구현). `DecideAsync`는 1단계에서 교착 미연결(그대로) |
+| `Arbitration/DeadlockOptions.cs` | record + 기본값 + `Validate()` → throw (S1이 본문·테스트) |
+| `Arbitration/DeadlockGraph.cs`·`YieldSearch.cs` | `FindCycles`·`Find` 시그니처 → throw (2단계 [핵심] 본문·테스트) |
+| `Arbitration/DeadlockResolver.cs` | 클래스 껍데기(옵션 보관) — 2단계 세부 확정 |
+| `Shared/Messaging/Payloads.cs` | `DeadlockDetectedPayload`에 `int SearchedDistance`(YieldToY 다음, ResolvedMs 앞 — 03 JSON 순서) |
+| `Simulator/Events/EventCollector.cs` | `Deadlock(robotId, payload)`·`Replan(robotId, payload)` 시그니처 → throw (S2가 본문·테스트) |
+| **searched_distance 체인(실구현)** | `Shared/Pipeline/StoreMapping.cs`(`ConflictLogChange.SearchedDistance` + `ToConflict` 채움, ConflictDetected는 NULL), `Infrastructure.Postgres/PgEventStore.cs`(conflict_log INSERT에 `searched_distance`), `tests/Shared.Tests/Pipeline/ConflictMappingTests.cs`(생성 인자 보정 + searched 단언) |
+
+### 2단계 — [핵심] 본문 + [단순 S1~S4] 병렬 (메인 지시 후)
+
+| 묶음 | 만들/고칠 파일 | 내용 | 완료 조건·테스트 |
 |---|---|---|---|
-| **[핵심]** | `Arbitration/DeadlockResolver.cs`·`DeadlockGraph.cs`·`YieldSearch.cs`(신규 순수), `InMemoryMoveArbiter.cs`·`AlwaysGrantMoveArbiter.cs`·`IMoveArbiter.cs`(판정 안 호출·락·완료 감지·`DrainPendingDeadlocks`), `RobotStepper.cs`·`Fleet/TaskLifecycle.cs`·`Fleet/FleetSimulation.cs`(해소 적용·재계획·flush·resolvedMs), `Shared/Pipeline/StoreMapping.cs`·`Infrastructure.Postgres/PgEventStore.cs`(searched_distance), 핵심 테스트 DL-01~05·07~10·12 | 탐지·양보·BFS·해소·재계획·적재 | S1·S2 껍데기 |
-| **[S1]** | `Arbitration/MoveDecision.cs`(`DeadlockInfo`·`DeadlockPhase`·`Deadlock` 필드), `Shared/Messaging/Payloads.cs`(`SearchedDistance`), `FleetJsonContext.cs` 확인, `tests/Shared.Tests/Messaging/`(JSON 왕복) | DTO·필드 + 직렬화 테스트 | 없음 |
-| **[S2]** | `Arbitration/DeadlockOptions.cs`(신규)+`Validate`, `Fleet/FleetOptions.cs`(재계획 키 3개), 옵션 테스트 DL-06 | 옵션 record + 검증 | 없음 |
-| **[S3]** | `Simulator/Events/EventCollector.cs`(`Deadlock`·`Replan` 발행 helper), 배치 순서 테스트 DL-11 | 발행 helper 2개 | S1 껍데기 |
-| **[S4]** | 회피 포켓 테스트 맵·`TestMaps` 헬퍼, `tests/Simulator.Tests` 픽스처, 기존 HeadOn 테스트 교체 뼈대 | 테스트 자산 | 없음 |
+| **[핵심]** | `DeadlockResolver.cs`·`DeadlockGraph.cs`·`YieldSearch.cs` 본문, `InMemoryMoveArbiter.cs`(판정 안 탐지·락·완료 감지·Drain), `RobotStepper.cs`·`Fleet/TaskLifecycle.cs`·`Fleet/FleetSimulation.cs`(해소 적용·재계획·flush·resolvedMs) | 탐지·양보·BFS·해소·재계획·drain | DL-01~05·07~10·12, build·test·format |
+| **[S1]** | `Arbitration/DeadlockOptions.cs`(`Validate` 본문만), `Fleet/FleetOptions.cs`(재계획 키 3개 추가), **신규** `tests/FleetController.Tests/DeadlockOptionsTests.cs` | `Validate`: `TTL >= YieldSearchMaxDistance × 10` 아니면 `ArgumentException`(04 연동 제약). FleetOptions에 `ReplanWaitThresholdMs=500`·`ReplanCooldownMs=100`·`ReplanMaxPerTask=5` init 속성 | DL-06. 기본값 04 표 그대로 |
+| **[S2]** | `Simulator/Events/EventCollector.cs`(`Deadlock`·`Replan` 본문), **신규** `tests/Simulator.Tests/EventCollectorDeadlockTests.cs` | `Deadlock`·`Replan`을 기존 `Conflict`처럼 `Add(robotId, 0, Item(...))` 로. DeadlockDetected는 `EventType.DeadlockDetected`, PathReplanned는 `EventType.PathReplanned` | DL-11(배치 rank 0 순서) |
+| **[S3]** | **신규** `tests/Shared.Tests/Messaging/DeadlockPayloadJsonTests.cs`, `FleetJsonContext.cs` 확인 | `DeadlockDetectedPayload`(SearchedDistance 포함) JSON 왕복 = 03 예시, camelCase, 속성 순서 = 선언 순서(searchedDistance가 resolvedMs 앞) | DL-11(JSON 부분) |
+| **[S4]** | **신규** 테스트 맵 또는 `TestMaps` 헬퍼(회피 포켓 통로 + 1칸 막다른 통로), `tests/Simulator.Tests` 픽스처, 기존 `MultiRobotTests.HeadOn_InCorridor_BothStayWaiting` **삭제** 후 DL-07·DL-08 **뼈대**(arrange + 단언은 [핵심] 병합 후 채움) | 해소/실패 시나리오 자산 | DL-07·DL-08 뼈대(단언 TODO) |
 
-> 선행: [핵심]은 S1(`MoveDecision.Deadlock`·`SearchedDistance`)·S2(`DeadlockOptions`) 시그니처에 의존. 10 §13처럼 **껍데기(필드·record·메서드)를 먼저 커밋**하면 병렬 컴파일된다. `searched_distance` 적재 체인(payload→매핑→INSERT)은 상관성이 커 [핵심]이 쥔다 — S1은 payload 필드만.
+### S1~S4가 건드리지 말 파일 ([핵심] 전용)
+
+`Arbitration/DeadlockResolver.cs`·`DeadlockGraph.cs`·`YieldSearch.cs`·`IMoveArbiter.cs`·`InMemoryMoveArbiter.cs`·`AlwaysGrantMoveArbiter.cs`·`MoveDecision.cs`·`MovePriority.cs`, `Simulator/RobotStepper.cs`·`Fleet/TaskLifecycle.cs`·`Fleet/FleetSimulation.cs`·`Fleet/TaskDispatcher.cs`·`Fleet/TaskGenerator.cs`, `Shared/Pipeline/StoreMapping.cs`, `Shared/Messaging/Payloads.cs`(SearchedDistance 1단계 확정 — 수정 금지), `Infrastructure.Postgres/PgEventStore.cs`, `tests/Shared.Tests/Pipeline/ConflictMappingTests.cs`.
+
+> S1은 `DeadlockOptions.cs`의 `Validate` **본문만**, S2는 `EventCollector.cs`의 두 메서드 **본문만** 채운다(1단계 껍데기가 그 파일을 이미 만들어 둠). S1·S2가 손대는 그 두 파일을 [핵심] 2단계는 건드리지 않는다 — 파일이 겹치지 않는다.
 
 ---
 

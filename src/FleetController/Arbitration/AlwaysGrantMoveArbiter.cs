@@ -16,4 +16,7 @@ public sealed class AlwaysGrantMoveArbiter : IMoveArbiter
 
     public ValueTask ReleaseAsync(string mapId, string robotId, Point cell, CancellationToken ct = default)
         => ValueTask.CompletedTask;
+
+    /// 모든 이동을 승인하므로 교착이 없다
+    public IReadOnlyList<DeadlockInfo> DrainPendingDeadlocks(string mapId, long tick) => Array.Empty<DeadlockInfo>();
 }

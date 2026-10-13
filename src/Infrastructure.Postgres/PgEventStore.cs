@@ -288,9 +288,9 @@ public sealed class PgEventStore : IEventStore
         if (rows.Count == 0) return (0, 0);
         const string sql = """
             INSERT INTO conflict_log (event_id, run_id, map_code, tick, conflict_type, x, y, robot_ids, resolution,
-                                      wait_ms, resolved_ms, yield_robot_id, yield_to_x, yield_to_y, occurred_at)
+                                      wait_ms, resolved_ms, yield_robot_id, yield_to_x, yield_to_y, searched_distance, occurred_at)
             VALUES (@id, @run, @map, @tick, @type, @x, @y, @robots, @resolution,
-                    @wait, @resolved, @yield, @yx, @yy, @at)
+                    @wait, @resolved, @yield, @yx, @yy, @searched, @at)
             ON CONFLICT (event_id) DO NOTHING
             """;
         await using var batch = new NpgsqlBatch(conn, tx);
@@ -311,6 +311,7 @@ public sealed class PgEventStore : IEventStore
             c.Parameters.Add(new NpgsqlParameter("yield", NpgsqlDbType.Text) { Value = (object?)r.YieldRobotId ?? DBNull.Value });
             c.Parameters.Add(Nullable("yx", NpgsqlDbType.Smallint, r.YieldToX));
             c.Parameters.Add(Nullable("yy", NpgsqlDbType.Smallint, r.YieldToY));
+            c.Parameters.Add(Nullable("searched", NpgsqlDbType.Smallint, r.SearchedDistance));
             c.Parameters.AddWithValue("at", r.OccurredAt.ToUniversalTime());
             batch.BatchCommands.Add(c);
         }

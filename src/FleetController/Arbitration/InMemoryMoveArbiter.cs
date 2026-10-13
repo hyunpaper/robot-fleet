@@ -64,6 +64,9 @@ public sealed class InMemoryMoveArbiter : IMoveArbiter
         return ValueTask.CompletedTask;
     }
 
+    /// 2단계 구현: 진행 중 교착을 failed로 확정해 돌려준다(멱등). 지금은 교착 미연결이라 빈 목록. 13 §2 · §12
+    public IReadOnlyList<DeadlockInfo> DrainPendingDeadlocks(string mapId, long tick) => Array.Empty<DeadlockInfo>();
+
     private static MoveDecision Decide(MapState map, MoveRequest r, IReadOnlyList<MoveRequest> all, ReadOnlySpan<int> ahead)
     {
         var robot = map.Robots.TryGetValue(r.RobotId, out var known) ? known : map.Register(r.RobotId, r.From);
