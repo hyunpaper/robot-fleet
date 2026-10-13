@@ -284,7 +284,7 @@ return {'BUSY'}
 | Task* | `task_event_log` INSERT `ON CONFLICT (event_id) DO NOTHING RETURNING` → 새 행만 `task_history` 단조 upsert(01) | 이벤트 영수증 + 단조 상태 |
 | (집계) | 새로 들어간 TaskCompleted만 `metrics_minute.task_count + 1` | 위와 같은 방식 |
 | RobotStatusChanged | 검증 → `robot_status_log` INSERT(`valid` 포함) `ON CONFLICT DO NOTHING RETURNING` → 새 행이면서 `valid`인 것만 `robot_state` 갱신 | 위반도 영수증은 남는다 |
-| ConflictDetected · DeadlockDetected | `conflict_log` `ON CONFLICT (event_id) DO NOTHING`. DeadlockDetected는 **`resolved_ms` · `yield_robot_id` · `yield_to_x/y` · `searched_distance`**도 적재 | 01 |
+| ConflictDetected · DeadlockDetected | `conflict_log` `ON CONFLICT (event_id) DO NOTHING`. DeadlockDetected는 **`resolved_ms` · `yield_robot_id` · `yield_to_x/y` · `searched_distance`**도 적재. **양보가 없으면(해소 실패 등) `yield_to_x/y`는 NULL** — 페이로드의 0은 좌표가 아니라 "없음"이다 | 01 |
 | PathReplanned | **`replan_log` INSERT** `ON CONFLICT (event_id) DO NOTHING` | 01. 05 재계획률 · 실험 5 · M9 `replan_storm`의 입력. "M7에서 정한다"를 M3로 당겼다 — M7이 바로 이 지표를 쓰는 실험이다 |
 | SimulationStarted | `simulations` **UPSERT** (`ON CONFLICT (run_id) DO UPDATE`로 메타 · `line_code` · `pattern_code` · `map_code` · `map_version` · `map_hash` · `params` 채움). **`mapHash`를 DB `maps`와 대조**, 다르면 경고 로그 | `run_id` |
 | SimulationEnded | 같은 행에 종료 통계 UPDATE | `run_id` |
@@ -298,6 +298,40 @@ return {'BUSY'}
 > `SimulationStarted`가 나중에 와서 나머지를 채운다.
 
 `tickMs`는 메시지 봉투에서 읽는다(§2). 워커에 틱 길이 설정이 없으므로 Simulator `--tick`을 바꿔도 시간 분해가 맞는다.
+
+### 배치 안 eventId 중복 제거 (적재 직전)
+
+`HandleAsync` 맨 앞에서 `BatchDedup.ByEventId`로 같은 `eventId`(= `Delivery.MessageId`)를 처음 1건만 남긴다.
+
+| 항목 | 결정 | 근거 |
+|---|---|---|
+| 왜 생기나 | Ingest 2단계 멱등의 "발행 후 확정 실패 → 재송신" 구간에서 같은 `eventId`가 한 배치에 두 번 들어올 수 있다 | 재송신은 같은 `batchId` · 같은 바이트. 두 전달이 같은 파티션 배치에 겹치면 중복 |
+| 안 막으면 | `PgEventStore`가 `TaskEvents.ToDictionary(e => e.EventId)`에서 `ArgumentException` → 같은 배치 무한 재시도 → **파티션 정지**. 상태 이벤트는 두 번째 사본이 `robot_state` 기준과 어긋나 `invalid`로 **잘못 통지** | 적재 전에 걸러야 둘 다 안 난다 |
+| 판정 키 | `MessageId`(발행자가 `eventId`로 채운다, §2). 역직렬화 없이 순수 | 빈 `MessageId`는 중복으로 묶지 않는다 — 깨진 메시지는 역직렬화 단계가 개별로 독 메시지 처리 |
+| 걸러낸 delivery | poison이 아니라 나머지와 함께 `multiple` ack. 이미 저장된 사본의 중복이므로 | DLQ 대상이 아니다 |
+| 집계 | `fleet_worker_batch_dedup_total` + `BatchOutcome.Duplicate`에 가산 | 중복 시도 수(완료 기준 2)에 함께 보인다 |
+
+### 저장 오류 분류 · 결정적 오류 격리
+
+지금까지 `StoreBatchAsync`의 모든 예외는 "일시 오류"로 보고 같은 배치를 무한 재시도했다. 그래서 **데이터 · 제약 · 문법 오류 하나로 파티션이 영구 정지**한다. 오류를 둘로 가른다.
+
+| 분류 | SQLSTATE | 처리 | 근거 |
+|---|---|---|---|
+| 결정적 | `22`(데이터) · `23`(제약) · `42`(문법 · 접근) | 재시도 안 함. 원인 메시지를 DLQ로, 경보 로그(Error) · `fleet_worker_deterministic_dlq_total` | 몇 번 보내도 같다. 파티션을 세우느니 그 메시지만 떼어 낸다 |
+| 일시적 | `08`(연결) · `53`(자원) · `57`(개입 · 취소) · 그 밖(타임아웃 · 소켓) · SQLSTATE 없음 | 기존대로 ack · nack 없이 백오프(200ms → ×2 → 5s) 무한 재시도 | 재시도하면 풀린다. 전달 횟수 보존(08 §8) |
+
+분류는 `DbErrorClass.IsDeterministicSqlState`(순수, Shared) + `PgEventStore`가 결정적 `PostgresException`을 `DeterministicStoreException`으로 감싸 올린다. `PostgresException` 의존은 저장소 구현에만 둔다.
+
+**어느 메시지가 원인인지 모를 때 — 배치 분할 격리.** 결정적 예외가 오면 `PartitionProcessor`가 배치를 절반씩 나눠 재처리하고, 1건까지 좁혀진 하위 배치가 또 결정적으로 실패하면 **그 1건만 DLQ**로 보내고 나머지는 정상 적재한다.
+
+| 항목 | 결정 | 근거 |
+|---|---|---|
+| 분할 재처리 안전성 | 결정적 예외는 `CommitAsync` 전에 던져지고 트랜잭션은 롤백돼 있다 — 하위 배치는 아무것도 커밋되지 않은 상태에서 다시 시작한다. 재처리 자체도 `ON CONFLICT`로 멱등 | 부분 커밋 없음 |
+| 전이 검증 의미 | 분할은 `robot_state` 기준을 하위 배치 단위로 다시 본다. 드문 복구 경로라 허용 | 결정적 오류는 이미 데이터가 깨진 상황 |
+| `42` 계열(스키마 · 코드 버그) | 모든 메시지에 걸려 분할이 1건씩 전부 DLQ로 보낸다 | 무한 정지보다 낫다. 경보 · DLQ로 운영자가 고친 뒤 DLQ 재생 |
+| ack | 격리한 1건은 `poison`으로 개별 reject(DLX → DLQ), 나머지는 `multiple` ack | 기존 ack 경로 그대로 |
+
+> 일시 오류(PostgreSQL 다운 등)는 **여전히 무한 재시도**다 — 유실 0 · 전달 횟수 보존 불변식을 건드리지 않는다. 바뀐 것은 "결정적 오류는 재시도 대상이 아니다"뿐이다.
 
 ### 상태 전이 검증
 
@@ -442,8 +476,13 @@ Simulator 명령행 추가: `--robots N` · `--lambda λ` · `--seed n` · `--in
 | 1 | 적체 0 대기: 실행 스크립트가 `fleet_queue_depth` 합 = 0이 10초 유지될 때까지 기다린 뒤 도구를 부른다 |
 | 2 | 송신 로그를 임시 테이블 `sent(event_id, run_id, batch_id, tick, event_type, category, key)`로 `COPY`(Npgsql binary import). `run_id`는 줄의 `runId`, 없으면 파일명 `{mapId}-{runId}.jsonl`에서 읽고 둘 다 없으면 오류 |
 | 3 | 차집합 SQL (아래) |
-| 4 | task · conflict 누락 0이면 sent에 나온 run마다 `run_metrics` UPSERT(재집계 가능) |
+| 4 | task · conflict 누락 0이면 sent에 나온 run마다 `run_metrics` UPSERT(재집계 가능). **`complete = (simulations.ended_at IS NOT NULL)`도 함께 쓴다** |
 | 5 | JSON 요약 출력(`runIds`, 범주별 수, `runMetricsComputed`) + 종료 코드: task · conflict 누락 0이면 0, 아니면 1 |
+
+> **미완료 run 구분(`run_metrics.complete`).** 중단 · 크래시로 `SimulationEnded`가 없는 run은 `simulations.ended_at` · `ticks`가 NULL이라
+> `throughput_per_hour` · `tick_overruns` · `stall_ms`가 **조용히 NULL**로 집계된다. 그 run의 run_metrics 행을 아예 안 만들면(계산 제외)
+> 부분 집계(시간 분해 · 리드타임 등)까지 사라지고 Reconcile이 "그 run은 없다"처럼 보인다. 그래서 **행은 만들되 `complete = false`로 표시**해
+> 분석이 완료 run만 골라 비교하게 한다. `complete` 컬럼은 01 `run_metrics` DDL(`001_schema.sql`)과 `ReconcileQueries.RunMetricsSql`에 반영.
 
 ```sql
 -- task 범주: Task* + RobotStatusChanged + Simulation*(영수증 대신 simulations.started_at · ended_at)
@@ -615,6 +654,25 @@ WHERE s.category = 'telemetry'
 | 5 | Simulator | `--ingest` 대상에 송신. Ingest가 아직 Not Ready면 503 · 연결 실패 → 재시도 | 버퍼가 차면 틱 정지 |
 
 > Ingest가 워커보다 먼저 떠도 안전하다. 토폴로지를 Ingest도 선언하므로 메시지는 큐에 쌓이고, 워커가 마이그레이션을 끝낸 뒤 소비한다.
+
+### 실서버 첫 실행 점검표 (SQL은 PostgreSQL에서 한 번도 실행된 적 없음)
+
+모든 통합 테스트(47건)는 접속 정보가 없어 skip이고, `unnest` · `RETURNING` · `run_metrics` CTE · 파티션 SQL은 **실제 서버에서 돈 적이 없다.** 사용자가 접속 정보를 넣고 통합 테스트를 돌릴 때 아래를 점검표로 쓴다. 각 항목은 "타입 추론 · 파티션 · ON CONFLICT 의미"처럼 **빈 DB 단위 테스트는 통과해도 실데이터에서 깨질 수 있는 지점**이다.
+
+| # | 위치 | 확인할 것 |
+|---|---|---|
+| 1 | `PgEventStore.cs` telemetry INSERT(`unnest` · `RETURNING run_id, map_code, robot_id, tick, status, occurred_at`) | 파티션 테이블(`robot_telemetry`) 대상 `ON CONFLICT DO NOTHING … RETURNING`이 DEFAULT · 날짜 파티션 양쪽에서 동작. nullable `smallint`(`battery`만 타입 명시) 배열 타입 추론 |
+| 2 | `PgEventStore.cs` telemetry `unnest` 배열 파라미터 | `battery`만 `NpgsqlDbType.Array \| Smallint` 명시, 나머지(`text[]` · `bigint[]` · `smallint[]` · `timestamptz[]`)는 추론 — 빈 배열 · nullable 섞임에서 타입 모호성 없는지 |
+| 3 | `PgEventStore.cs` task_history UPSERT(`NpgsqlBatchCommand` 이름 파라미터) | `COALESCE(@type smallint, 0)`의 `@type`이 `smallint`로, `@robot`이 `DBNull`일 때 타입 추론, `WHERE EXCLUDED.status > task_history.status` 단조 조건 |
+| 4 | `PgEventStore.cs` conflict_log · replan_log `unnest`(task `text[]` 11개 배열) | `@task` nullable `text[]`, `compute_ms` `real[]` 타입, replan 11개 배열 길이 일치 |
+| 5 | `PgEventStore.cs` simulations UPSERT `params`(`Jsonb`) · `CheckMapHashAsync` | `JsonSerializer.Serialize` 결과가 `jsonb`로 들어가는지, 빈 `maps` 기준정보에서 대조 생략 |
+| 6 | `ReconcileQueries.cs` `RunMetricsSql` CTE | `percentile_cont(...) FILTER`, `::real` · `::int` 형 변환, `NULLIF` 0 나눗셈, `LEFT JOIN s ON true`에서 `complete = (s.ended_at IS NOT NULL)`가 simulations 행 없을 때 false |
+| 7 | `ReconcileQueries.cs` 차집합(`sent` 임시 테이블 binary COPY) | `s.category` · `s.event_type` · `s.key` 컬럼, run 경계 조건(`t.run_id = s.run_id`) |
+| 8 | `003_partitions.sql` DEFAULT 파티션 | DEFAULT에 행이 생긴 날짜의 파티션 생성(`CREATE TABLE … PARTITION OF … FOR VALUES`)이 겹침으로 실패하는지(§8 "사람이 옮긴다") |
+| 9 | `Migrator.cs` 체크섬 | 001 · 002가 개발 중 재작성됐다 — 적용된 적 없는 빈 서버라 첫 적용은 통과하지만, 한 번 적용한 뒤 파일을 고치면 `MigrationChecksumException` |
+| 10 | 결정적 오류 격리(이번 추가) | 일부러 제약 위반 메시지 1건을 섞어 DLQ로 1건만 가고 나머지 적재, `fleet_worker_deterministic_dlq_total` 증가, 파티션이 안 서는지(W 계열에 추가 가능) |
+
+> 통합 테스트를 돌리면 1~9는 해당 `[IntegrationFact]`가 덮는다. 10은 아직 테스트가 없다(실서버 격리 테스트로 추가할 후보).
 
 ---
 
