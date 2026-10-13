@@ -19,6 +19,7 @@ internal sealed class PartitionProcessor
     private IPartitionSubscription? _subscription;
     private Task _loop = Task.CompletedTask;
     private volatile bool _stopping;
+    private bool _storeHalted;
 
     public PartitionProcessor(string queue, IPartitionSubscriber subscriber, EventHandlers handlers, WorkerOptions options,
                               TimeProvider time, ILogger logger)
@@ -137,9 +138,11 @@ internal sealed class PartitionProcessor
         WorkerMetrics.BatchSeconds.Observe(_time.GetElapsedTime(started).TotalSeconds);
     }
 
-    /// 일시 오류: 같은 (하위)배치를 백오프로 무한 재시도(전달 횟수 보존, 08 §8).
-    /// 결정적 오류(데이터 · 제약 · 문법): 배치를 절반씩 나눠 원인을 1건까지 좁힌 뒤 그 메시지만 DLQ로 보내고,
-    /// 나머지는 정상 적재한다. 커밋 전에 던진 결정적 예외라 트랜잭션은 롤백돼 있어 분할 재처리가 안전하다(멱등). 10 §6
+    /// 저장 오류를 갈래로 가른다(10 §6).
+    /// 일시: ack · nack 없이 상한 백오프로 재시도(전달 횟수 보존, 08 §8).
+    /// 데이터: 배치를 절반씩 나눠 원인을 1건까지 좁혀 **배치당 상한 1건**만 DLQ, 나머지는 적재.
+    /// 시스템 · 데이터 상한 초과: 분할 없이 같은 배치를 재시도하며 **파티션 정지 유지 + 경보** — DB가 고쳐지면 자동 재개.
+    /// 결정적 예외는 커밋 전에 던져지고 트랜잭션이 롤백돼 있어 분할 · 재시도가 안전하다(멱등)
     private async Task<BatchOutcome> HandleWithIsolationAsync(IReadOnlyList<Delivery> batch, CancellationToken ct)
     {
         var backoff = _options.DbRetryMin;
@@ -147,37 +150,108 @@ internal sealed class PartitionProcessor
         {
             try
             {
-                return await _handlers.HandleAsync(batch, ct);
+                var outcome = await _handlers.HandleAsync(batch, ct);
+                SetHalted(false, null, null);
+                return outcome;
             }
-            catch (DeterministicStoreException ex) when (!ct.IsCancellationRequested)
+            catch (ClassifiedStoreException ex) when (ex.Kind == StoreErrorKind.Data && !ct.IsCancellationRequested)
             {
-                if (batch.Count <= 1)
+                var budget = new[] { 1 };   // 원래 배치당 DLQ 상한 1건
+                var result = await TryIsolateDataAsync(batch, budget, ct);
+                if (result.Ok)
                 {
-                    WorkerMetrics.DeterministicDlq.Inc(batch.Count);
-                    _logger.LogError(ex, "{Queue} 결정적 저장 오류 {SqlState} — 메시지 {MessageId} 1건 DLQ",
-                        Queue, ex.SqlState, batch.Count == 1 ? batch[0].MessageId : "(빈 배치)");
-                    return batch.Count == 1
-                        ? new BatchOutcome(new[] { batch[0].DeliveryTag }, 0, 0, 0)
-                        : new BatchOutcome(Array.Empty<ulong>(), 0, 0, 0);
+                    if (result.DataDlq > 0) WorkerMetrics.DataErrorDlq.Inc(result.DataDlq);
+                    SetHalted(false, null, null);
+                    return result.Outcome;
                 }
 
-                _logger.LogWarning(ex, "{Queue} 결정적 저장 오류 {SqlState} — 배치 {Count}건 분할 재시도",
-                    Queue, ex.SqlState, batch.Count);
-                var mid = batch.Count / 2;
-                var left = await HandleWithIsolationAsync(batch.Take(mid).ToList(), ct);
-                var right = await HandleWithIsolationAsync(batch.Skip(mid).ToList(), ct);
-                return Merge(left, right);
+                // 상한 초과(또는 분할 중 시스템 오류) → 정지로 전환
+                SetHalted(true, ex.SqlState, ex);
+                backoff = await DelayBackoffAsync(backoff, ct);
+            }
+            catch (ClassifiedStoreException ex) when (ex.Kind == StoreErrorKind.System && !ct.IsCancellationRequested)
+            {
+                // 시스템 오류: 분할하지 않고 정지 유지, DB가 고쳐지면 다음 재시도에서 통과
+                SetHalted(true, ex.SqlState, ex);
+                backoff = await DelayBackoffAsync(backoff, ct);
             }
             catch (Exception ex) when (ex is not OperationCanceledException && !ct.IsCancellationRequested)
             {
-                // ack도 nack도 하지 않는다 — 전달 횟수를 올리지 않고 같은 배치를 다시 (08 §8)
+                // 일시 오류 — ack도 nack도 하지 않고 같은 배치를 다시 (08 §8)
                 WorkerMetrics.DbRetry.Inc();
-                _logger.LogWarning(ex, "{Queue} 배치 {Count}건 저장 실패, {Delay}ms 후 재시도", Queue, batch.Count, backoff.TotalMilliseconds);
-                await Task.Delay(backoff, _time, ct);
-                backoff = TimeSpan.FromTicks(Math.Min(backoff.Ticks * 2, _options.DbRetryMax.Ticks));
+                _logger.LogWarning(ex, "{Queue} 배치 {Count}건 저장 일시 오류, {Delay}ms 후 재시도", Queue, batch.Count, backoff.TotalMilliseconds);
+                backoff = await DelayBackoffAsync(backoff, ct);
             }
         }
     }
+
+    /// 데이터 오류 분할 격리. 반환 Ok=false면 DLQ 상한 초과 또는 하위에서 시스템 오류 — 상위가 정지로 전환한다.
+    /// 아직 브로커에 reject하지 않으므로(ProcessAsync가 끝에 한다) 정지 전환은 유실 없이 안전하다
+    private async Task<IsolationResult> TryIsolateDataAsync(IReadOnlyList<Delivery> batch, int[] budget, CancellationToken ct)
+    {
+        var backoff = _options.DbRetryMin;
+        while (true)
+        {
+            try
+            {
+                return new IsolationResult(await _handlers.HandleAsync(batch, ct), true, 0);
+            }
+            catch (ClassifiedStoreException ex) when (ex.Kind == StoreErrorKind.System && !ct.IsCancellationRequested)
+            {
+                return new IsolationResult(EmptyOutcome, false, 0);   // 상위가 정지 전환
+            }
+            catch (ClassifiedStoreException ex) when (ex.Kind == StoreErrorKind.Data && !ct.IsCancellationRequested)
+            {
+                if (batch.Count <= 1)
+                {
+                    if (budget[0] <= 0)
+                        return new IsolationResult(EmptyOutcome, false, 0);   // 상한 초과 → 정지
+
+                    budget[0]--;
+                    _logger.LogError(ex, "{Queue} 데이터 오류 {SqlState} — 메시지 {MessageId} 1건 DLQ",
+                        Queue, ex.SqlState, batch.Count == 1 ? batch[0].MessageId : "(빈 배치)");
+                    var poison = batch.Count == 1 ? new[] { batch[0].DeliveryTag } : Array.Empty<ulong>();
+                    return new IsolationResult(new BatchOutcome(poison, 0, 0, 0), true, batch.Count);
+                }
+
+                var mid = batch.Count / 2;
+                var left = await TryIsolateDataAsync(batch.Take(mid).ToList(), budget, ct);
+                if (!left.Ok) return new IsolationResult(EmptyOutcome, false, 0);
+                var right = await TryIsolateDataAsync(batch.Skip(mid).ToList(), budget, ct);
+                if (!right.Ok) return new IsolationResult(EmptyOutcome, false, 0);
+                return new IsolationResult(Merge(left.Outcome, right.Outcome), true, left.DataDlq + right.DataDlq);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && !ct.IsCancellationRequested)
+            {
+                WorkerMetrics.DbRetry.Inc();
+                _logger.LogWarning(ex, "{Queue} 분할 격리 중 일시 오류, {Delay}ms 후 재시도", Queue, backoff.TotalMilliseconds);
+                backoff = await DelayBackoffAsync(backoff, ct);
+            }
+        }
+    }
+
+    // 현재 backoff만큼 기다리고 다음 backoff(×2, 상한 DbRetryMax)를 돌려준다
+    private async Task<TimeSpan> DelayBackoffAsync(TimeSpan backoff, CancellationToken ct)
+    {
+        await Task.Delay(backoff, _time, ct);
+        return TimeSpan.FromTicks(Math.Min(backoff.Ticks * 2, _options.DbRetryMax.Ticks));
+    }
+
+    // 정지 상태 게이지 · 경보. 전환될 때만 로그를 남긴다(재시도마다 Error를 쏟지 않게)
+    private void SetHalted(bool halted, string? sqlState, Exception? ex)
+    {
+        if (halted && !_storeHalted)
+            _logger.LogError(ex, "{Queue} 저장 정지 — 시스템 오류 {SqlState}. DB · 배포를 고치면 자동 재개", Queue, sqlState);
+        else if (!halted && _storeHalted)
+            _logger.LogInformation("{Queue} 저장 재개", Queue);
+
+        _storeHalted = halted;
+        WorkerMetrics.StoreHalted.WithLabels(Queue).Set(halted ? 1 : 0);
+    }
+
+    private readonly record struct IsolationResult(BatchOutcome Outcome, bool Ok, int DataDlq);
+
+    private static readonly BatchOutcome EmptyOutcome = new(Array.Empty<ulong>(), 0, 0, 0);
 
     private static BatchOutcome Merge(BatchOutcome a, BatchOutcome b) => new(
         a.Poison.Concat(b.Poison).ToList(),

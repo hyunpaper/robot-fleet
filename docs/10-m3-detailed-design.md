@@ -311,27 +311,30 @@ return {'BUSY'}
 | 걸러낸 delivery | poison이 아니라 나머지와 함께 `multiple` ack. 이미 저장된 사본의 중복이므로 | DLQ 대상이 아니다 |
 | 집계 | `fleet_worker_batch_dedup_total` + `BatchOutcome.Duplicate`에 가산 | 중복 시도 수(완료 기준 2)에 함께 보인다 |
 
-### 저장 오류 분류 · 결정적 오류 격리
+### 저장 오류 분류 · 격리 · 정지
 
-지금까지 `StoreBatchAsync`의 모든 예외는 "일시 오류"로 보고 같은 배치를 무한 재시도했다. 그래서 **데이터 · 제약 · 문법 오류 하나로 파티션이 영구 정지**한다. 오류를 둘로 가른다.
+지금까지 `StoreBatchAsync`의 모든 예외는 "일시 오류"로 보고 같은 배치를 무한 재시도해, **데이터 · 제약 · 문법 오류 하나로 파티션이 영구 정지**했다. 오류를 **세 갈래**로 가른다(`DbErrorClass.Classify`, 순수).
 
-| 분류 | SQLSTATE | 처리 | 근거 |
+| 갈래 | SQLSTATE | 처리 | 근거 |
 |---|---|---|---|
-| 결정적 | `22`(데이터) · `23`(제약) · `42`(문법 · 접근) | 재시도 안 함. 원인 메시지를 DLQ로, 경보 로그(Error) · `fleet_worker_deterministic_dlq_total` | 몇 번 보내도 같다. 파티션을 세우느니 그 메시지만 떼어 낸다 |
-| 일시적 | `08`(연결) · `53`(자원) · `57`(개입 · 취소) · 그 밖(타임아웃 · 소켓) · SQLSTATE 없음 | 기존대로 ack · nack 없이 백오프(200ms → ×2 → 5s) 무한 재시도 | 재시도하면 풀린다. 전달 횟수 보존(08 §8) |
+| **일시** | `08`(연결) · `40`(직렬화 · 교착) · `53`(자원) · `57`(개입 · 취소) · 타임아웃 · 소켓 · SQLSTATE 없음 | ack · nack 없이 상한 백오프(200ms → ×2 → 5s) 무한 재시도 | 재시도하면 풀린다. 전달 횟수 보존(08 §8) |
+| **데이터** | `22`(데이터) · `23`(제약) | 분할 격리로 원인을 1건까지 좁혀 **배치당 상한 1건**만 DLQ, 나머지 적재 | 특정 메시지가 원인일 수 있다. 그 1건만 떼어 낸다 |
+| **시스템** | `42`(문법 · 접근) · `0A`(미지원) · **미분류 코드** | **분할하지 않고** 같은 배치를 재시도하며 **파티션 정지 유지 + 경보**. DB · 배포가 고쳐지면 자동 재개 | 배포 · 마이그레이션 어긋남이라 배치 내용과 무관하게 전부 실패 — 분할하면 큐 전체를 DLQ로 비울 뿐이다(07 "큐가 버퍼, 복구 후 따라온다" 붕괴, DLQ 재주입 도구 없음, 재주입해도 상태 이벤트 순서 깨져 invalid 대량) |
 
-분류는 `DbErrorClass.IsDeterministicSqlState`(순수, Shared) + `PgEventStore`가 결정적 `PostgresException`을 `DeterministicStoreException`으로 감싸 올린다. `PostgresException` 의존은 저장소 구현에만 둔다.
+`PgEventStore`가 일시가 아닌 `PostgresException`을 갈래를 실어 `ClassifiedStoreException`으로 감싼다. 일시 오류(및 비-`PostgresException`)는 감싸지 않고 올려 재시도에 맡긴다. `PostgresException` 의존은 저장소 구현에만 둔다.
 
-**어느 메시지가 원인인지 모를 때 — 배치 분할 격리.** 결정적 예외가 오면 `PartitionProcessor`가 배치를 절반씩 나눠 재처리하고, 1건까지 좁혀진 하위 배치가 또 결정적으로 실패하면 **그 1건만 DLQ**로 보내고 나머지는 정상 적재한다.
+**데이터 오류 분할 격리(배치당 DLQ 상한 1건).** `PartitionProcessor`가 배치를 절반씩 나눠 재처리하고, 1건까지 좁혀진 하위 배치가 또 데이터 오류면 **그 1건만 DLQ**(상한 소진)로 보내고 나머지는 적재한다.
 
 | 항목 | 결정 | 근거 |
 |---|---|---|
-| 분할 재처리 안전성 | 결정적 예외는 `CommitAsync` 전에 던져지고 트랜잭션은 롤백돼 있다 — 하위 배치는 아무것도 커밋되지 않은 상태에서 다시 시작한다. 재처리 자체도 `ON CONFLICT`로 멱등 | 부분 커밋 없음 |
-| 전이 검증 의미 | 분할은 `robot_state` 기준을 하위 배치 단위로 다시 본다. 드문 복구 경로라 허용 | 결정적 오류는 이미 데이터가 깨진 상황 |
-| `42` 계열(스키마 · 코드 버그) | 모든 메시지에 걸려 분할이 1건씩 전부 DLQ로 보낸다 | 무한 정지보다 낫다. 경보 · DLQ로 운영자가 고친 뒤 DLQ 재생 |
-| ack | 격리한 1건은 `poison`으로 개별 reject(DLX → DLQ), 나머지는 `multiple` ack | 기존 ack 경로 그대로 |
+| 상한 초과 → 정지 전환 | **2건째 원인**이 나오거나 배치 전체가 원인이면 더 DLQ하지 않고 **시스템 오류로 간주해 정지**로 바꾼다 | 매핑 버그로 특정 이벤트 타입 전부가 23502를 내는 경우를 방어 — 큐를 DLQ로 비우지 않는다 |
+| 분할 · 정지 전환 안전성 | 결정적 예외는 `CommitAsync` 전에 던져져 트랜잭션이 롤백돼 있고, 브로커 reject는 `ProcessAsync` 끝에서만 한다. 정지로 전환해도 아직 아무것도 reject하지 않았다 → 유실 없음. 이미 커밋된 하위 배치는 `ON CONFLICT`로 멱등 | 부분 커밋 · 부분 reject 없음 |
+| 전이 검증 의미 | 분할은 `robot_state` 기준을 하위 배치 단위로 다시 본다. 드문 복구 경로라 허용 | — |
+| ack · 메트릭 | 격리한 1건은 `poison`으로 개별 reject(DLX → DLQ), 나머지는 `multiple` ack. `fleet_worker_data_error_dlq_total`. 정지는 `fleet_worker_store_halted{queue}` 게이지 + 전환 시 Error 경보 | 기존 ack 경로 그대로 |
 
-> 일시 오류(PostgreSQL 다운 등)는 **여전히 무한 재시도**다 — 유실 0 · 전달 횟수 보존 불변식을 건드리지 않는다. 바뀐 것은 "결정적 오류는 재시도 대상이 아니다"뿐이다.
+> 일시 오류(PostgreSQL 다운 등)와 시스템 오류는 **ack · nack 없이 재시도**다 — 유실 0 · 전달 횟수 보존 불변식을 건드리지 않는다. 데이터 오류만 배치당 1건을 DLQ로 뺀다.
+> **격리된 상태 이벤트 뒤의 같은 로봇 `invalid` 증가는 정상 신호**다 — 기준 상태가 한 전이 빠진 채로 이어지면 뒤 전이가 `from` 불일치로 `valid=false`가 된다. Reconcile 누락 · `fleet_invalid_depth`로 드러나므로 숨기지 않는다.
+> **실서버 첫 적용 후 `001` · `002` · `003`은 동결한다.** 이후 스키마 변경은 `004`부터 새 파일로 — 적용된 마이그레이션을 고치면 체크섬 불일치로 기동 실패한다(§8).
 
 ### 상태 전이 검증
 
@@ -670,7 +673,7 @@ WHERE s.category = 'telemetry'
 | 7 | `ReconcileQueries.cs` 차집합(`sent` 임시 테이블 binary COPY) | `s.category` · `s.event_type` · `s.key` 컬럼, run 경계 조건(`t.run_id = s.run_id`) |
 | 8 | `003_partitions.sql` DEFAULT 파티션 | DEFAULT에 행이 생긴 날짜의 파티션 생성(`CREATE TABLE … PARTITION OF … FOR VALUES`)이 겹침으로 실패하는지(§8 "사람이 옮긴다") |
 | 9 | `Migrator.cs` 체크섬 | 001 · 002가 개발 중 재작성됐다 — 적용된 적 없는 빈 서버라 첫 적용은 통과하지만, 한 번 적용한 뒤 파일을 고치면 `MigrationChecksumException` |
-| 10 | 결정적 오류 격리(이번 추가) | 일부러 제약 위반 메시지 1건을 섞어 DLQ로 1건만 가고 나머지 적재, `fleet_worker_deterministic_dlq_total` 증가, 파티션이 안 서는지(W 계열에 추가 가능) |
+| 10 | 저장 오류 분류 · 격리 · 정지(이번 추가) | ① 제약 위반(23) 1건을 섞어 DLQ 1건 · 나머지 적재 · `fleet_worker_data_error_dlq_total` 증가 ② 같은 타입 2건 이상 원인이면 DLQ 상한 1건 → 정지 전환 ③ 시스템 오류(42, 없는 열)로 `fleet_worker_store_halted{queue}=1` · 파티션 정지 · DB 고치면 자동 재개(W 계열에 추가 가능) |
 
 > 통합 테스트를 돌리면 1~9는 해당 `[IntegrationFact]`가 덮는다. 10은 아직 테스트가 없다(실서버 격리 테스트로 추가할 후보).
 

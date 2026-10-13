@@ -26,11 +26,12 @@ public sealed class PgEventStore : IEventStore
         {
             return await StoreBatchCoreAsync(batch, ct);
         }
-        catch (PostgresException pg) when (DbErrorClass.IsDeterministicSqlState(pg.SqlState))
+        catch (PostgresException pg) when (DbErrorClass.Classify(pg.SqlState) != StoreErrorKind.Transient)
         {
-            // 데이터 · 제약 · 문법 오류는 재시도해도 같다 → 결정적 예외로 올려 처리기가 DLQ로 보낸다(10 §6).
-            // 트랜잭션은 예외로 롤백됐으므로 이 배치는 아무것도 쓰지 않은 상태다
-            throw new DeterministicStoreException($"결정적 저장 오류 {pg.SqlState}: {pg.MessageText}", pg.SqlState, pg);
+            // 데이터(22 · 23) · 시스템(42 · 0A · 미분류) 오류는 갈래를 실어 올려 처리기가 격리 · 정지를 고른다(10 §6).
+            // 트랜잭션은 예외로 롤백됐으므로 이 배치는 아무것도 쓰지 않은 상태다. 일시 오류(08 · 40 · 53 · 57)는 감싸지 않고 올려 재시도
+            var kind = DbErrorClass.Classify(pg.SqlState);
+            throw new ClassifiedStoreException($"저장 오류 {pg.SqlState}({kind}): {pg.MessageText}", kind, pg.SqlState, pg);
         }
     }
 
