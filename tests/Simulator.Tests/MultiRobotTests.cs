@@ -122,19 +122,50 @@ public class MultiRobotTests
         fleet.LogLines("R-002", "WAIT").Should().ContainSingle("Waiting이 이어지는 동안 WAIT는 한 번만 찍는다");
     }
 
-    [Fact]
-    public async Task HeadOn_InCorridor_BothStayWaiting()
+    private const string PendingCore = "M2 [핵심] 구현 대기";
+
+    [Fact(Skip = PendingCore)]
+    public async Task DL07_HeadOn_WithPocket_YieldResolvesAndBothArrive()
     {
-        // 맞바꿈은 대기만으로 풀리지 않는다. 교착 해소(양보)는 이후 단계
-        var fleet = Create(TestMaps.FromRows("1111"),
+        // R-001이 포켓 (2,1) 바로 위에서 동쪽, R-002가 (3,0)에서 서쪽 — 정면 대치
+        var fleet = Create(TestMaps.PocketCorridor(),
+            ("R-001", new(2, 0), Heading.East, new(5, 0)),
+            ("R-002", new(3, 0), Heading.West, new(0, 0)));
+
+        await fleet.RunAsync(maxTicks: 500);
+
+        // TODO(core): 양쪽 Completed, DeadlockDetected(yield, searchedDistance, resolvedMs>0) 1회, PathReplanned(deadlock)
+        fleet.Units.Should().NotBeNull();
+    }
+
+    [Fact(Skip = PendingCore)]
+    public async Task DL08_HeadOn_DeadEndCorridor_ResolutionFails()
+    {
+        // 회피 지점이 없는 1칸 통로
+        var fleet = Create(TestMaps.DeadEndCorridor(),
             ("R-001", new(1, 0), Heading.East, new(3, 0)),
             ("R-002", new(2, 0), Heading.West, new(0, 0)));
 
-        await fleet.RunAsync(maxTicks: 30);
+        await fleet.RunAsync(maxTicks: 500);
 
-        fleet.Robots.Should().OnlyContain(r => r.Status == RobotStatus.Waiting);
-        fleet.LogLines("R-001", "WAIT").Should().Equal("[t=000001 0.1s] R-001 WAIT    (1,0)   reason=Occupied");
-        fleet.LogLines("R-002", "WAIT").Should().Equal("[t=000001 0.1s] R-002 WAIT    (2,0)   reason=Swap");
+        // TODO(core): 순환 전원 TaskFailed(deadlock_unresolved)·Waiting→Error, DeadlockDetected(failed, searched=상한, resolvedMs=0) 1회
+        fleet.Units.Should().NotBeNull();
+    }
+
+    [Fact(Skip = PendingCore)]
+    public async Task DL09_ThreeVersusOne_NoPingPongOrStarvation()
+    {
+        // 동쪽 3대 행렬 대 서쪽 1대. 포켓 (2,1)·(5,1)
+        var fleet = Create(TestMaps.TwoPocketCorridor(),
+            ("R-001", new(3, 0), Heading.East, new(5, 0)),
+            ("R-002", new(2, 0), Heading.East, new(6, 0)),
+            ("R-003", new(1, 0), Heading.East, new(7, 0)),
+            ("R-004", new(4, 0), Heading.West, new(0, 0)));
+
+        await fleet.RunAsync(maxTicks: 2000);
+
+        // TODO(core): 유한 틱 내 전원 종료(Completed 또는 상한 초과 실패), 같은 로봇의 무한 양보 없음
+        fleet.Units.Should().NotBeNull();
     }
 
     [Fact]
