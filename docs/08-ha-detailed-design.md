@@ -560,10 +560,10 @@ telemetry만 있는 배치는 항상 `done`이다.
 
 | 노드 | k3s | 레이블 | 고정 IP | vCPU | RAM | 디스크 |
 |---|---|---|---|---|---|---|
-| node-1 | **server** | `fleet/pg=true` | `192.168.10.11` | 2 | **4GiB / 8GiB** | 40GB |
-| node-2 | agent | — | `192.168.10.12` | 2 | **4GiB / 8GiB** | 30GB |
-| node-3 | agent | — | `192.168.10.13` | 2 | **4GiB / 8GiB** | 30GB |
-| **합** | | | | **6** | **12GB / 24GB** | **100GB** |
+| node-1 | **server** | `fleet/pg=true` | `192.168.10.11` | 2 / 4 | **4GiB / 8GiB** | 40GB |
+| node-2 | agent | — | `192.168.10.12` | 2 / 4 | **4GiB / 8GiB** | 30GB |
+| node-3 | agent | — | `192.168.10.13` | 2 / 4 | **4GiB / 8GiB** | 30GB |
+| **합** | | | | **6 / 12** | **12GB / 24GB** | **100GB** |
 
 설치 명령과 옵션은 02 "k3s 설치". 노드 3대 모두 **taint 없음**, `--kubelet-arg=system-reserved=memory=600Mi`.
 
@@ -694,7 +694,7 @@ node-1은 k3s server를 겸하므로 **API 서버가 함께 내려간다.**
 
 전용 control plane을 없앤 대가로 생긴 유일한 트레이드오프다. M8 시나리오로 측정해 문서화한다(§12).
 
-CPU는 노드당 4 vCPU. request 합 4.95 core, 1대 장애 후 남은 8 vCPU 안이다(M5 확인).
+CPU는 **실험 구성 기준** 노드당 4 vCPU(기본 구성은 2 vCPU). request 합 4.95 core, 1대 장애 후 남은 8 vCPU 안이다(M5 확인).
 
 ---
 

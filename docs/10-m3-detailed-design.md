@@ -99,6 +99,7 @@
   "schemaVersion": 1,
   "batchId": "018f3c2a-7b1e-7c3d-9a2f-0123456789ab",
   "mapId": "factory-a",
+  "runId": "20261013-143022-r200",
   "tick": 142057,
   "tickMs": 100,
   "occurredAt": "2026-04-01T09:14:23.412Z",
@@ -107,11 +108,12 @@
 ```
 
 큐 메시지 본문 = 항목 하나의 공통 봉투(03)에 `schemaVersion`을 더한 것. `eventId`는 Ingest가 `{batchId}/{index}`로 채우고,
-`tickMs`는 배치 봉투 값을 항목마다 복사한다(03). 워커는 telemetry 1행을 이 값만큼의 상태 시간으로 환산한다.
+`tickMs` · `runId`는 배치 봉투 값을 항목마다 복사한다(03). 워커는 telemetry 1행을 이 값만큼의 상태 시간으로 환산하고,
+`runId`로 모든 행의 run을 가른다. `runId`가 비면 Ingest는 400, 워커는 독 메시지로 처리한다.
 
 | 항목 | 결정 | 근거 |
 |---|---|---|
-| 타입 | `EventBatch`, `EventEnvelope`, 이벤트별 `sealed record` 페이로드 9종, `EventType` 상수, `EventCategory { Telemetry, Task, Conflict }` | 03 스키마 그대로 |
+| 타입 | `EventBatch`, `EventEnvelope`(둘 다 `MapId` 다음에 `RunId`), 이벤트별 `sealed record` 페이로드 12종(03 이벤트 10종 + `SimulationStarted` · `SimulationEnded`), `EventType` 상수, `EventCategory { Telemetry, Task, Conflict }` | 03 스키마 그대로 |
 | 다형성 | `eventType` 문자열로 판별, 페이로드는 `JsonElement`로 받아 타입별 역직렬화 | `$type` 같은 라이브러리 판별자를 넣지 않는다 — 03 JSON 그대로 |
 | 직렬화 | `System.Text.Json` **소스 생성기**(`FleetJsonContext`), camelCase, 숫자 문자열 금지, `null` 생략 | 리플렉션 없음 · 빠름. 06 원칙(직렬화 가능한 것만) |
 | 필드 순서 | 선언 순서 고정 + `[JsonPropertyOrder]` | 송신 로그 · 해시 · 대조가 바이트 단위로 같아야 한다 |
@@ -171,7 +173,7 @@
 
 | 단계 | 동작 | 실패 시 |
 |---|---|---|
-| 1 | 스키마 검증: `schemaVersion == 1`, `batchId` UUIDv7, `tickMs ≥ 1`, `events` 1~1000, `eventType` 알려진 값, 페이로드 필수 필드 · 라우팅 키 필드 존재 | **400** + 첫 오류 위치. 재시도하지 않을 오류 |
+| 1 | 스키마 검증: `schemaVersion == 1`, `batchId` UUIDv7, `mapId` · `runId` 비어 있지 않음, `tickMs ≥ 1`, `events` 1~1000, `eventType` 알려진 값, 페이로드 필수 필드 · 라우팅 키 필드 존재 | **400** + 첫 오류 위치. 재시도하지 않을 오류 |
 | 2 | `IIdemStore.TryBegin(batchId)` — 08 §9 상태 전이 표 그대로 | `done` → 202(중복), 다른 인스턴스 `pending` 5s 미만 → 503 `Retry-After: 1`, Redis 오류 → 건너뜀 |
 | 3 | 메시지 생성: `eventId = {batchId}/{index}`, 라우팅 키, 범주 | — |
 | 4 | 발행: **신뢰 채널**(task · conflict)과 **telemetry 채널**에 배열 순서대로 | §아래 |
@@ -249,7 +251,8 @@ return {'BUSY'}
 |---|---|
 | 파일 | `artifacts/sendlog/{mapId}-{runId}.jsonl` (`artifacts/`는 이미 `.gitignore`) |
 | 기록 시점 | **202를 받은 뒤** 배치 단위로 append + flush |
-| 행 | 이벤트당 1행 `{"eventId","batchId","tick","eventType","category","key"}` — `key`는 라우팅 키(telemetry 대조용 `robotId`) |
+| 행 | 이벤트당 1행 `{"eventId","runId","batchId","tick","eventType","category","key"}` — `key`는 라우팅 키(telemetry 대조용 `robotId`), `runId`는 배치 봉투 값 |
+| run 식별자 | `{yyyyMMdd}-{HHmmss}-r{robots}` (UTC, `RunIds.New`). 파일명과 줄의 `runId`가 같다 |
 | 근거 | 202 이후 = Ingest가 책임을 넘겨받은 집합. 202 전 버퍼분은 종료 시 `unsent`로 따로 센다 |
 
 `IIngestClient` 구현은 `HttpIngestClient` 하나다(D7).
@@ -437,18 +440,21 @@ Simulator 명령행 추가: `--robots N` · `--lambda λ` · `--seed n` · `--in
 | 단계 | 동작 |
 |---|---|
 | 1 | 적체 0 대기: 실행 스크립트가 `fleet_queue_depth` 합 = 0이 10초 유지될 때까지 기다린 뒤 도구를 부른다 |
-| 2 | 송신 로그를 임시 테이블 `sent(event_id, run_id, event_type, category, key, tick)`로 `COPY`(Npgsql binary import). `run_id`는 송신 로그 파일명 `{mapId}-{runId}.jsonl`에서 읽는다 |
+| 2 | 송신 로그를 임시 테이블 `sent(event_id, run_id, batch_id, tick, event_type, category, key)`로 `COPY`(Npgsql binary import). `run_id`는 줄의 `runId`, 없으면 파일명 `{mapId}-{runId}.jsonl`에서 읽고 둘 다 없으면 오류 |
 | 3 | 차집합 SQL (아래) |
-| 4 | JSON 요약 출력 + 종료 코드: task · conflict 누락 0이면 0, 아니면 1 |
+| 4 | task · conflict 누락 0이면 sent에 나온 run마다 `run_metrics` UPSERT(재집계 가능) |
+| 5 | JSON 요약 출력(`runIds`, 범주별 수, `runMetricsComputed`) + 종료 코드: task · conflict 누락 0이면 0, 아니면 1 |
 
 ```sql
--- task 범주: Task* + RobotStatusChanged
+-- task 범주: Task* + RobotStatusChanged + Simulation*(영수증 대신 simulations.started_at · ended_at)
 SELECT s.event_id FROM sent s
 WHERE s.category = 'task'
   AND NOT EXISTS (SELECT 1 FROM task_event_log t WHERE t.event_id = s.event_id AND t.run_id = s.run_id)
-  AND NOT EXISTS (SELECT 1 FROM robot_status_log r WHERE r.event_id = s.event_id AND r.run_id = s.run_id);   -- valid 무관
--- 전이 위반 수 (기준 3)
-SELECT count(*) FROM robot_status_log WHERE run_id = @run AND NOT valid;
+  AND NOT EXISTS (SELECT 1 FROM robot_status_log r WHERE r.event_id = s.event_id AND r.run_id = s.run_id)   -- valid 무관
+  AND NOT (s.event_type = 'SimulationStarted' AND EXISTS (SELECT 1 FROM simulations m WHERE m.run_id = s.run_id AND m.started_at IS NOT NULL))
+  AND NOT (s.event_type = 'SimulationEnded' AND EXISTS (SELECT 1 FROM simulations m WHERE m.run_id = s.run_id AND m.ended_at IS NOT NULL));
+-- 전이 위반 수 (기준 3) — sent에 나온 run만
+SELECT count(*) FROM robot_status_log WHERE run_id IN (SELECT DISTINCT run_id FROM sent) AND NOT valid;
 -- conflict 범주 (PathReplanned 제외)
 SELECT s.event_id FROM sent s
 WHERE s.category = 'conflict' AND s.event_type <> 'PathReplanned'
@@ -568,7 +574,7 @@ WHERE s.category = 'telemetry'
 | R-01 · R-05 | 셋 다 | 실제 명부로 `p % N == rank`, 2회 연속일 때만 적용 |
 | R-04 | 셋 다 | 로봇 40대 × 140단계 상태 전이, 합류 · 탈퇴 재배정 → invalid 0 |
 | R-07 | Rabbit · Pg | 명부 없음 → 단일 워커가 16 파티션 전부 |
-| **R-run-01** | Pg | 같은 `robotId`가 run A · B에 각각 적재되고 `robot_state`가 **run별로 분리**된다. run B 첫 전이에서 `invalid` 0 |
+| **R-run-01** | Pg (저장소) · Rabbit · Pg (워커 전이 검증) | 같은 `robotId`가 run A · B에 각각 적재되고 `robot_state`가 **run별로 분리**된다. run B 첫 전이에서 `invalid` 0 |
 | **R-run-02** | Pg | 같은 `taskId`가 run A(Completed) · B(Pending)에 존재하고, B가 **단조 upsert에 막히지 않는다** |
 | **R-run-03** | Pg | `SimulationStarted`보다 telemetry가 먼저 도착해도 적재 성공(FK 없음), 이후 메타가 채워진다 |
 | **R-run-04** | Pg | Reconcile 차집합이 **run 경계를 넘지 않는다**(run A의 이벤트를 run B 누락으로 세지 않는다) |
@@ -647,10 +653,10 @@ WHERE s.category = 'telemetry'
 | 파일 | 내용 |
 |---|---|
 | `src/Shared/Messaging/FleetSchema.cs` | `public static class FleetSchema { public const int Version = 1; public const int MaxEventsPerBatch = 1000; }` |
-| `src/Shared/Messaging/EventType.cs` | 03 이벤트 9종 문자열 상수 + `IReadOnlySet<string> All` |
+| `src/Shared/Messaging/EventType.cs` | 03 이벤트 12종 문자열 상수 + `IReadOnlySet<string> All` |
 | `src/Shared/Messaging/EventCategory.cs` | `enum EventCategory { Telemetry, Task, Conflict }`, `EventCategories.Of(string eventType)`, `EventCategories.IsPersistent(string eventType)` — 03 "이벤트 → 큐 매핑" 표 |
 | `src/Shared/Messaging/EventBatch.cs` | 배치 · 항목 봉투 |
-| `src/Shared/Messaging/Payloads.cs` | 페이로드 record 9종 + `CellDto` |
+| `src/Shared/Messaging/Payloads.cs` | 페이로드 record 12종 + `CellDto` |
 | `src/Shared/Messaging/FleetJsonContext.cs` | 소스 생성 컨텍스트 + `FleetJson` 도우미 |
 | `src/Shared/Messaging/RoutingKeys.cs` | 01 라우팅 키 표 |
 | `src/Shared/Messaging/TopologySpec.cs` | 08 §8 인자 표를 데이터로 |
@@ -664,14 +670,14 @@ WHERE s.category = 'telemetry'
 namespace RobotFleet.Shared.Messaging;
 
 public sealed record EventBatch(
-    int SchemaVersion, string BatchId, string MapId, long Tick, int TickMs,
+    int SchemaVersion, string BatchId, string MapId, string RunId, long Tick, int TickMs,
     DateTimeOffset OccurredAt, IReadOnlyList<EventItem> Events);
 
 public sealed record EventItem(string EventType, JsonElement Payload);
 
 /// 큐 메시지 본문. eventId = "{batchId}/{index}"
 public sealed record EventEnvelope(
-    int SchemaVersion, string EventId, string EventType, string MapId, long Tick, int TickMs,
+    int SchemaVersion, string EventId, string EventType, string MapId, string RunId, long Tick, int TickMs,
     DateTimeOffset OccurredAt, JsonElement Payload)
 {
     public static EventEnvelope From(EventBatch batch, int index);
@@ -833,7 +839,7 @@ public static class StatusTransitions
 | `dotnet build src/Shared/RobotFleet.Shared.csproj` 경고 0 |
 | `dotnet test tests/Shared.Tests` 전부 통과, 기존 테스트 회귀 없음 |
 | M-01: 03의 배치 봉투 예시 JSON(`tickMs` 포함) → 역직렬화 → 직렬화가 공백 제외 같은 바이트, 속성 순서 = 선언 순서 |
-| M-02: 9종 각각 라우팅 키 기대값 표(테스트에 표로) |
+| M-02: 12종 각각 라우팅 키 기대값 표(테스트에 표로) |
 | M-03: `EventEnvelope.From(batch, 17).EventId == $"{batchId}/17"`, `TickMs` 복사 |
 | M-04: `Build("")` → exchange 4 · 큐 50 · 바인딩 49(DLX → DLQ 포함), 위 인자 표와 일치, `Build("t1.")` → 모든 이름 접두사 |
 | 전이: 03 표의 허용 칸 전부 `true`, 금지 예시 5개 `false` |
@@ -1046,7 +1052,7 @@ public static class HealthEndpoints
 | IngestApi | `WebApplication.CreateBuilder(args)` → `builder.Configuration.AddFleetSources(builder.Environment.ContentRootPath, args)` → `AddFleetIngest` → `app.MapPost("/api/v1/events/batch", IngestEndpoints.HandleAsync)` · `MapFleetHealth()` · `MapMetrics()`. 요청 본문 상한 8MB(Kestrel `MaxRequestBodySize`) |
 | `IngestEndpoints.HandleAsync(HttpContext ctx, IngestService svc)` | 본문을 바이트로 읽어 `svc.HandleAsync` → `RetryAfterSeconds`가 있으면 `Retry-After` 헤더 → `Results.Json(resp.Body, statusCode: resp.StatusCode)` (camelCase). 본문 읽기 실패 → 400 |
 | EventWorker | `WebApplication.CreateBuilder(args)` → `AddFleetSources` → `AddFleetWorker` → Kestrel은 `Fleet:Management:Port`(기본 8081)만 listen → `MapFleetHealth()` · `MapMetrics()`. 업무 엔드포인트 없음(10 D5) |
-| Simulator (`--robots N`이 있을 때 fleet 모드) | 맵 로드 → `--ingest`가 있으면 `HttpClient{BaseAddress}` → `HttpIngestClient` → (`--sendlog`면 `SendLog(dir, mapId, runId)`, runId = `yyyyMMddHHmmss` UTC) → `EventBatchSender` → 송신 루프를 `Task.Run(sender.RunAsync)` → `FleetSimulation(map, opts, sink: sender, …).RunAsync` → 끝나면 `sender.DrainAsync` → `unsent` 출력. `--ingest`가 없으면 `sink: null`. `--metrics-port`면 `Prometheus.MetricServer(port).Start()`. 종료 코드 = `FleetRunResult.ExitCode`, 단 `unsent > 0`이면 5. `--robots`가 없으면 기존 M1 경로 그대로 |
+| Simulator (`--robots N`이 있을 때 fleet 모드) | 맵 로드 → `--ingest`가 있으면 `HttpClient{BaseAddress}` → `HttpIngestClient` → (`--sendlog`면 `SendLog(dir, mapId, runId)`, runId = `RunIds.New(UTC 지금, robots)` → `{yyyyMMdd}-{HHmmss}-r{robots}`, 맵 해시 = `RunIds.MapHash(맵 파일 바이트)`) → `EventBatchSender` → 송신 루프를 `Task.Run(sender.RunAsync)` → `FleetSimulation(map, opts, sink: sender, …).RunAsync` → 끝나면 `sender.DrainAsync` → `unsent` 출력. `--ingest`가 없으면 `sink: null`. `--metrics-port`면 `Prometheus.MetricServer(port).Start()`. 종료 코드 = `FleetRunResult.ExitCode`, 단 `unsent > 0`이면 5. `--robots`가 없으면 기존 M1 경로 그대로 |
 | Ctrl+C | 기존 M1과 같이 취소 토큰 → 정상 종료 경로(Drain 포함) |
 
 `appsettings.json` (IngestApi · EventWorker 공통 골격, 값은 비움):
