@@ -560,10 +560,10 @@ telemetry만 있는 배치는 항상 `done`이다.
 
 | 노드 | k3s | 레이블 | 고정 IP | vCPU | RAM | 디스크 |
 |---|---|---|---|---|---|---|
-| node-1 | **server** | `fleet/pg=true` | `192.168.10.11` | 2 | **8GiB** | 40GB |
-| node-2 | agent | — | `192.168.10.12` | 2 | **8GiB** | 30GB |
-| node-3 | agent | — | `192.168.10.13` | 2 | **8GiB** | 30GB |
-| **합** | | | | **6** | **24GB** | **100GB** |
+| node-1 | **server** | `fleet/pg=true` | `192.168.10.11` | 2 | **4GiB / 8GiB** | 40GB |
+| node-2 | agent | — | `192.168.10.12` | 2 | **4GiB / 8GiB** | 30GB |
+| node-3 | agent | — | `192.168.10.13` | 2 | **4GiB / 8GiB** | 30GB |
+| **합** | | | | **6** | **12GB / 24GB** | **100GB** |
 
 설치 명령과 옵션은 02 "k3s 설치". 노드 3대 모두 **taint 없음**, `--kubelet-arg=system-reserved=memory=600Mi`.
 
@@ -632,7 +632,7 @@ PV의 `nodeAffinity`는 노드명(`values: [node-1]` 등)을 가리키므로 **k
 | node-1 | `/data/postgres` | `pg-data` | 20Gi |
 | node-2 | `/data/redis` · `/data/sentinel` · `/data/rabbitmq` | `redis-node-2` · `sentinel-node-2` · `rabbitmq-node-2` | 2Gi · 64Mi · 10Gi |
 | node-3 | `/data/redis` · `/data/sentinel` · `/data/rabbitmq` | `redis-node-3` · `sentinel-node-3` · `rabbitmq-node-3` | 2Gi · 64Mi · 10Gi |
-| node-3 | Prometheus | local-path PVC | 보존 7일 |
+| node-3 | Prometheus (실험 구성) | local-path PVC | 보존 2일 |
 
 | 결정 | 근거 |
 |---|---|
@@ -645,61 +645,43 @@ PV의 `nodeAffinity`는 노드명(`values: [node-1]` 등)을 가리키므로 **k
 
 ## 11. 리소스 표 근거
 
-표 자체는 02 "고가용성 구성 (M5 + M6)". 로컬 VM이라 **구성이 하나뿐이다.** 모니터링도 상시 띄운다.
-limit = request × 2.
-
-| 컴포넌트 | replicas | CPU req | Mem req | Mem limit | 합계 |
-|---|---|---|---|---|---|
-| Simulator | 1 (Recreate) | 500m | 512Mi | 1Gi | 512Mi |
-| FleetController | 2 | 200m | 256Mi | 512Mi | 512Mi |
-| IngestApi | 2 | 200m | 256Mi | 512Mi | 512Mi |
-| EventWorker | 2 (HPA **~3**) | 300m | 256Mi | 512Mi | 768Mi |
-| QueryApi | 1 | 100m | 192Mi | 384Mi | 192Mi |
-| Redis | 3 | 100m | 256Mi | 512Mi | 768Mi |
-| Sentinel | 3 | 50m | 32Mi | 64Mi | 96Mi |
-| RabbitMQ | 3 | 300m | 512Mi | 1Gi | 1.5Gi |
-| PostgreSQL | 1 | 500m | 512Mi | 1Gi | 512Mi |
-| nginx ingress | 1 | 100m | 128Mi | 256Mi | 128Mi |
-| Prometheus | 1 (보존 7일) | 300m | 512Mi | 1Gi | 512Mi |
-| Grafana | 1 | 100m | 256Mi | 512Mi | 256Mi |
-| **합계 (EventWorker 3)** | | **4.65 core** | | | **6.16Gi** |
-
-노드 allocatable = 8GiB − 600Mi = **7.4Gi**, 3대 합 **22.2Gi**.
+표 자체는 02 "고가용성 구성 (M5 + M6)". **기본**(노드 4GiB, 모니터링 없음)과 **실험**(노드 8GiB, Prometheus · Grafana 포함) 두 구성이다.
+request 합 **5.41Gi(기본, EventWorker 3) / 6.16Gi(실험)**, limit = request × 2.
 
 | 결정 | 근거 |
 |---|---|
-| **메모리 8GiB × 3** | 호스트 64GB 중 24GB만 쓰고 40GB가 남는다 |
-| **모니터링 상시** | 메모리 여유가 5Gi씩 있다. 실험 세션에만 켜는 분리가 필요 없다 |
-| Prometheus 보존 **7일** · node-3 local-path PVC | 보존 기간은 디스크가 감당한다. 메모리는 활성 시계열 수에 비례하므로 512Mi로 충분하다. node-3 장애 시 Pending(모니터링 정지 — §10 과반 표와 같음) |
-| EventWorker HPA 상한 **3** | **메모리가 아니라 CPU 때문이다.** 상한을 4로 올리면 CPU request가 4.95 core가 되어 1대 장애 시 남은 4 vCPU를 넘는다 |
+| EventWorker를 HPA 최대(**4**)로 합산하면 | 기본 5.66Gi / 실험 6.41Gi, CPU 4.95 core. 아래 노드별 표는 상한 3(02 HPA) 기준이다 |
 | Sentinel 32Mi | 상태가 거의 없는 프로세스. 실측 10Mi 안팎 |
 | RabbitMQ 512Mi (limit 1Gi) | quorum 32 + WAL 64MB 제한. 워터마크 0.6이 limit 안에서 역압을 건다 |
 | Redis 256Mi (limit 512Mi) | `maxmemory` 192mb + AOF rewrite fork 여유 |
-| 노드 시스템 예약 0.6Gi | OS + k3s(server · agent) + kube-proxy · flannel · node_exporter 실사용. k3s 설치 시 `--kubelet-arg=system-reserved=memory=600Mi`로 명시해 allocatable을 **7.4Gi**로 고정 |
+| 노드 시스템 예약 0.6Gi | OS + k3s(server · agent) + kube-proxy · flannel · node_exporter 실사용. k3s 설치 시 `--kubelet-arg=system-reserved=memory=600Mi`로 명시해 allocatable을 **기본 3.4Gi / 실험 7.4Gi**로 고정 |
 | MinIO 제외 | 선택 항목. 쓰면 그만큼 여유에서 뺀다 |
-| limit = request × 2 유지 | .NET GC 특성. 02 각주 그대로 |
+| Prometheus는 node-3 local-path PVC, 보존 **2일** | 실험 구성에만 뜬다. node-3 장애 시 Pending(모니터링 정지 — §10 과반 표와 같음) |
+| Simulator는 node-1 밖(§10) | 아래 표의 node-2 위치는 정상 시 배치. 총괄 결정으로 node-1 회피(지시서 범위 밖) |
 
 ### 정상 시 노드별 request
 
-| 노드 | request | ≤ 7.4Gi | 여유 |
-|---|---|---|---|
-| node-1 | 1.66Gi | ✓ | 5.74Gi |
-| node-2 | 2.22Gi | ✓ | 5.18Gi |
-| node-3 | 2.28Gi | ✓ | 5.12Gi |
-| **합계** | **6.16Gi** | | |
+| 노드 | 배치 (애플리케이션) | 기본 | ≤ 3.4Gi · 여유 | 실험 | ≤ 7.4Gi · 여유 |
+|---|---|---|---|---|---|
+| node-1 | PostgreSQL · nginx · EventWorker(증설분) | 1.66Gi | ✓ 1.76Gi | 1.66Gi | ✓ 5.74Gi |
+| node-2 | Simulator · FleetController · IngestApi · EventWorker · QueryApi | 2.22Gi | ✓ 1.20Gi | 2.22Gi | ✓ 5.18Gi |
+| node-3 | FleetController · IngestApi · EventWorker (+ 실험: Prometheus · Grafana) | 1.53Gi | ✓ 1.88Gi | 2.28Gi | ✓ 5.12Gi |
+| **합계** | | **5.41Gi** | | **6.16Gi** | |
+
+노드마다 데이터 멤버(Redis · Sentinel · RabbitMQ 0.78Gi)가 포함돼 있다.
 
 ### 노드 1대 장애 시 재배치 (EventWorker 3)
 
-남은 2대 allocatable = 2 × 7.4Gi = **14.8Gi**.
+남은 2대 allocatable = 기본 2 × 3.4Gi = **6.8Gi**, 실험 2 × 7.4Gi = **14.8Gi**.
 죽은 노드의 데이터 멤버 3개(0.78Gi)는 local PV + required anti-affinity로 **의도적으로 Pending**이다.
 
-| 장애 | 재배치할 pod | 재배치 request | 남은 2대 request 합 | ≤ 14.8Gi | 노드당 | Pending | 비고 |
-|---|---|---|---|---|---|---|---|
-| node-1 | nginx · EventWorker | 0.38Gi | 4.88Gi | ✓ | **2.44Gi** | 데이터 멤버 3, **PostgreSQL** | **API 서버 동반 정지** — 이 재배치는 node-1 복귀까지 일어나지 않는다(아래). Simulator는 영향 없음 |
-| node-2 | Simulator · FleetController · IngestApi · QueryApi · EventWorker | 1.44Gi | 5.38Gi | ✓ | **2.69Gi** | 데이터 멤버 3 | Simulator는 node-3으로(nodeAffinity) |
-| node-3 | FleetController · IngestApi · EventWorker · Grafana | 1.00Gi | 4.88Gi | ✓ | **2.44Gi** | 데이터 멤버 3, **Prometheus** | |
+| 장애 | 재배치할 pod | 재배치 request (기본 / 실험) | 남은 2대 합 (기본 / 실험) | 노드당 (기본 / 실험) | Pending | 비고 |
+|---|---|---|---|---|---|---|
+| node-1 | nginx · EventWorker | 0.38Gi / 0.38Gi | 4.13Gi / 4.88Gi | 2.06Gi / 2.44Gi | 데이터 멤버 3, **PostgreSQL** | **API 서버 동반 정지** — 이 재배치는 node-1 복귀까지 일어나지 않는다(아래). Simulator는 영향 없음 |
+| node-2 | Simulator · FleetController · IngestApi · QueryApi · EventWorker | 1.44Gi / 1.44Gi | 4.63Gi / 5.38Gi | 2.31Gi / 2.69Gi | 데이터 멤버 3 | Simulator는 node-3으로(nodeAffinity) |
+| node-3 | FleetController · IngestApi · EventWorker (+ 실험: Grafana) | 0.75Gi / 1.00Gi | 4.63Gi / 4.88Gi | 2.31Gi / 2.44Gi | 데이터 멤버 3 (+ 실험: **Prometheus**) | |
 
-메모리는 노드당 2.44~2.69Gi로 **여유가 4.7Gi 이상**이다. 제약은 CPU다.
+모두 남은 2대 allocatable(6.8Gi / 14.8Gi) 안이다. 노드당 값은 균등 분산 기준이며, 기본 구성의 노드당 상한 3.4Gi 안에 든다.
 
 node-1은 k3s server를 겸하므로 **API 서버가 함께 내려간다.**
 
@@ -712,8 +694,7 @@ node-1은 k3s server를 겸하므로 **API 서버가 함께 내려간다.**
 
 전용 control plane을 없앤 대가로 생긴 유일한 트레이드오프다. M8 시나리오로 측정해 문서화한다(§12).
 
-> **CPU가 유일한 병목이다.** 노드당 2 vCPU. request 합 4.65 core / 6 vCPU, 1대 장애 시 남은 **4 vCPU에 약 4.2 core**가 들어가 여유가 거의 없다.
-> EventWorker 증설분이 Pending될 수 있고 HPA 축소로 해소된다. **측정이 걸린 작업(M7)은 AWS에서 한다**(02 "M7 — AWS").
+CPU는 노드당 4 vCPU. request 합 4.95 core, 1대 장애 후 남은 8 vCPU 안이다(M5 확인).
 
 ---
 
@@ -757,7 +738,7 @@ FleetController 배치 처리 중 kill은 시점을 고정해야 재현된다. �
 | 1 | 노드 띠 | **3개**: node-1 · node-2 · node-3 (192.168.10.11~13), 같은 폭 |
 | 2 | node-1 부제 | `k3s server 겸임 · taint 없음 · fleet/pg=true` — PostgreSQL · nginx + 데이터 멤버 (Simulator 없음) |
 | 3 | node-2 부제 | `k3s agent` — Simulator(`NotIn node-1`) · FleetController · IngestApi · EventWorker · QueryApi + 데이터 멤버 |
-| 4 | node-3 부제 | `k3s agent · 모니터링 상시` — FleetController · IngestApi · EventWorker · Prometheus · Grafana + 데이터 멤버 |
+| 4 | node-3 부제 | `k3s agent · 모니터링(실험 구성)` — FleetController · IngestApi · EventWorker · Prometheus · Grafana + 데이터 멤버 |
 | 5 | 상단 부제 | `k3s 노드 3대 · 네임스페이스 4개` |
 | 6 | FleetController 상자 | `×2 (상한) · 판정 /move-requests/batch · 경로 /paths/batch · 재전송 멱등 · 서로 다른 노드(preferred) · 200m / 256Mi` |
 | 7 | Redis 상자 | `primary 1 + replica 2 · AOF everysec · local PV /data/redis · 노드당 1(required)` |

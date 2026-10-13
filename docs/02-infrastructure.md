@@ -24,7 +24,7 @@
 |---|---|---|
 | 세션 전환 | **suspend / resume** — 상태 그대로 | destroy → 재생성 → 덤프 복원 |
 | IP | **고정** | 매번 변경 |
-| 메모리 | **8GiB × 3**, 모니터링 상시 | 비용 때문에 빠듯 |
+| 메모리 | 노드 **4GiB(기본) / 8GiB(실험)** × 3 — 호스트 64GB에 여유 | 비용 때문에 빠듯 |
 | M8 반복 실험 | **VM 스냅샷으로 같은 상태 재현** | 매번 재구축, 조건이 미세하게 달라짐 |
 | CPU | **6코어 — M7의 제약** | 필요한 만큼 |
 
@@ -137,28 +137,28 @@ kubectl label node node-1 fleet/pg=true
 | `--disable servicelb` | MetalLB 또는 NodePort 사용 |
 | `--write-kubeconfig-mode 644` | sudo 없이 kubectl 사용 |
 | `--tls-san 192.168.10.11` | IP가 고정이라 한 줄이면 된다. kubeconfig도 한 번 받으면 계속 쓴다 |
-| `system-reserved=memory=600Mi` | 노드별 allocatable 7.4Gi |
+| `system-reserved=memory=600Mi` | 노드별 allocatable 기본 3.4Gi / 실험 7.4Gi |
 
 ### 노드 구성
 
 | 구성 | 조건 | 비고 |
 |---|---|---|
-| 단일 노드 | 서버 1대 | **M3 · M4는 k3s 자체가 불필요** — 사용자가 제공한 단일 인프라 서버(RabbitMQ · Redis · PostgreSQL), 접속 정보는 `appsettings.Local.json`(커밋 금지) 또는 환경 변수. **k3s는 M5부터** |
+| 단일 노드 | 서버 1대 | **M3 · M4는 k3s 자체가 불필요 — 원격 인프라(브로커 3종만). k3s는 M5부터**. 접속 정보는 `appsettings.Local.json`(커밋 금지) 또는 환경 변수 |
 | **노드 3** | 3대(동일 사양) | **권장(M5~)** — Redis Sentinel · RabbitMQ quorum의 과반 합의에 서로 다른 노드의 투표자 3이 필요하다. 2대면 1개 손실 시 과반을 못 채운다 |
 
 | 노드 | k3s | 레이블 | 고정 IP | vCPU | RAM | 디스크 |
 |---|---|---|---|---|---|---|
-| node-1 | **server** | `fleet/pg=true` | `192.168.10.11` | 2 | **8GiB** | 40GB |
-| node-2 | agent | — | `192.168.10.12` | 2 | **8GiB** | 30GB |
-| node-3 | agent | — | `192.168.10.13` | 2 | **8GiB** | 30GB |
-| **합** | | | | **6** | **24GB** | **100GB** |
+| node-1 | **server** | `fleet/pg=true` | `192.168.10.11` | 2 | **4GiB / 8GiB** | 40GB |
+| node-2 | agent | — | `192.168.10.12` | 2 | **4GiB / 8GiB** | 30GB |
+| node-3 | agent | — | `192.168.10.13` | 2 | **4GiB / 8GiB** | 30GB |
+| **합** | | | | **6** | **12GB / 24GB** | **100GB** |
 
 | 결정 | 근거 |
 |---|---|
 | 전용 control plane을 두지 않는다 | 2GB를 쓰면서 워크로드를 받지 않는 전용 노드는 순수 낭비다. 과반은 어차피 데이터 멤버가 있는 3대로 닫힌다 |
-| **CPU가 유일한 제약** | 메모리는 24GB를 써도 호스트에 40GB가 남지만 호스트가 6코어 6스레드(SMT 없음)다. CPU request 합 4.65 core가 6 vCPU 안에 들어가지만 여유가 1.35 core뿐이다 |
+| **CPU가 유일한 제약** | 메모리는 실험 구성 24GB를 써도 호스트에 40GB가 남지만 호스트가 6코어 6스레드(SMT 없음)다. CPU request 합 4.65 core가 6 vCPU 안에 들어가지만 여유가 1.35 core뿐이다 |
 | 노드당 **2 vCPU** | 3대 × 2 = 6으로 물리 코어와 1:1. 오버커밋하면 호스트가 굶는다 |
-| 메모리 8GiB | 로컬에서는 줄일 이유가 없고, **모니터링을 상시 켤 수 있다** |
+| 메모리 4GiB(기본) / 8GiB(실험) | 모니터링은 실험 구성에만 띄우고, 그때 VM 메모리를 8GiB로 올린다("리소스 배분") |
 | node-1 장애 시 | API 서버가 함께 내려간다 — 기동 중인 pod는 유지, 스케줄링 · 재배치만 정지(08 §10) |
 
 배치와 1대 장애 시 재배치는 08 §10 · §11.
@@ -200,48 +200,47 @@ ingress-nginx nginx ingress controller
 
 | 컴포넌트 | CPU | Memory request | 비고 |
 |---|---|---|---|
-| Prometheus | 300m | 512Mi | 보존 7일 기준. 메모리는 활성 시계열 수에 비례하고, 보존은 디스크가 감당한다 |
+| Prometheus | 300m | 512Mi | 보존 2일 기준 |
 | Grafana | 100m | 256Mi | |
 
 ### 고가용성 구성 (M5 + M6)
 
-로컬 VM이라 **구성이 하나뿐이다.** 모니터링도 상시 띄운다.
+**기본**(모니터링 없음)과 **실험**(모니터링 포함) 두 구성이다. Prometheus · Grafana는 실험 구성에만 띄운다.
 
-| 컴포넌트 | replicas | CPU req | Mem req | Mem limit | 합계 |
-|---|---|---|---|---|---|
-| Simulator | 1 (Recreate) | 500m | 512Mi | 1Gi | 512Mi |
-| FleetController | 2 | 200m | 256Mi | 512Mi | 512Mi |
-| IngestApi | 2 | 200m | 256Mi | 512Mi | 512Mi |
-| EventWorker | 2 (HPA **~3**) | 300m | 256Mi | 512Mi | 768Mi |
-| QueryApi | 1 | 100m | 192Mi | 384Mi | 192Mi |
-| Redis | 3 | 100m | 256Mi | 512Mi | 768Mi |
-| Sentinel | 3 | 50m | 32Mi | 64Mi | 96Mi |
-| RabbitMQ | 3 | 300m | 512Mi | 1Gi | 1.5Gi |
-| PostgreSQL | 1 | 500m | 512Mi | 1Gi | 512Mi |
-| nginx ingress | 1 | 100m | 128Mi | 256Mi | 128Mi |
-| Prometheus | 1 (보존 7일) | 300m | 512Mi | 1Gi | 512Mi |
-| Grafana | 1 | 100m | 256Mi | 512Mi | 256Mi |
-| **합계 (EventWorker 3)** | | **4.65 core** | | | **6.16Gi** |
+| 컴포넌트 | replicas | CPU req | Mem req | Mem limit | 기본 | 실험 |
+|---|---|---|---|---|---|---|
+| Simulator | 1 (Recreate) | 500m | 512Mi | 1Gi | 512Mi | 512Mi |
+| FleetController | 2 | 200m | 256Mi | 512Mi | 512Mi | 512Mi |
+| IngestApi | 2 | 200m | 256Mi | 512Mi | 512Mi | 512Mi |
+| EventWorker | 2 (HPA ~3) | 300m | 256Mi | 512Mi | 768Mi | 768Mi |
+| QueryApi | 1 | 100m | 192Mi | 384Mi | 192Mi | 192Mi |
+| Redis | 3 | 100m | 256Mi | 512Mi | 768Mi | 768Mi |
+| Sentinel | 3 | 50m | 32Mi | 64Mi | 96Mi | 96Mi |
+| RabbitMQ | 3 | 300m | 512Mi | 1Gi | 1.5Gi | 1.5Gi |
+| PostgreSQL | 1 | 500m | 512Mi | 1Gi | 512Mi | 512Mi |
+| nginx ingress | 1 | 100m | 128Mi | 256Mi | 128Mi | 128Mi |
+| Prometheus | 1 (보존 2일) | 300m | 512Mi | 1Gi | — | 512Mi |
+| Grafana | 1 | 100m | 256Mi | 512Mi | — | 256Mi |
+| **합계 (EventWorker 3)** | | | | | **5.41Gi** | **6.16Gi** |
 
-노드 allocatable = 8GiB − 600Mi = **7.4Gi**, 3대 합 **22.2Gi**. 노드별 request와 1대 장애 시 재배치는 08 §11.
+노드 allocatable = 노드 메모리 − 시스템 예약 600Mi. 기본(4GiB) **3.4Gi**, 실험(8GiB) **7.4Gi**.
+노드별 request와 1대 장애 시 재배치는 08 §11.
 
 | 결정 | 근거 |
 |---|---|
-| **메모리 8GiB × 3** | 호스트 64GB 중 24GB만 쓰고 40GB가 남는다 |
-| **모니터링 상시** | 메모리 여유가 노드당 5Gi씩 있다. 실험 세션에만 켜는 분리가 필요 없다 |
-| Prometheus 보존 **7일** · **512Mi** | 보존 기간은 디스크가 감당한다. 메모리는 활성 시계열 수에 비례하므로 512Mi로 충분하다 |
-| EventWorker HPA 상한 **3** | **메모리가 아니라 CPU 때문이다.** 상한을 4로 올리면 CPU request가 4.95 core가 되어 1대 장애 시 남은 4 vCPU를 넘는다 |
+| 기본 / 실험 두 구성 | 평소 개발 · 기능 확인에는 모니터링이 필요 없다. 측정하는 세션(M6 · M8)에만 Prometheus · Grafana를 띄우고 노드 메모리를 8GiB로 올린다 |
+| Prometheus **512Mi** · 보존 **2일** | 메모리는 활성 시계열 수에 비례한다. 실험 세션 단위로 결과를 스냅샷 · 보고서로 남기므로 보존은 짧게 둔다 |
+| EventWorker HPA 상한 **3** | **메모리가 아니라 CPU 때문이다.** 노드 3대 × 2 vCPU에서 상한을 올리면 1대 장애 시 남은 CPU를 넘는다 |
 | limit = request × 2 유지 | .NET GC 특성(아래) |
 
-> **CPU가 유일한 병목이다.** request 합 4.65 core / 6 vCPU, 1대 장애 시 남은 **4 vCPU에 약 4.2 core**가 들어가 여유가 거의 없다.
-> EventWorker 증설분이 Pending될 수 있고 HPA 축소로 해소된다. **측정이 걸린 작업(M7)은 AWS에서 한다.**
+> **CPU가 병목이다.** 호스트가 6코어라 증설분이 Pending될 수 있고 HPA 축소로 해소된다. **측정이 걸린 작업(M7)은 AWS에서 한다.**
 
 ### 서버 요구사항
 
 | 구성 | 사양 | 가능 범위 |
 |---|---|---|
 | 단일 노드 | 8GB | 최소 구성 + 모니터링. 데이터 계층 단일 인스턴스 |
-| **노드 3** | **노드 3 × 8GiB (2 vCPU)** | **고가용성 구성 + 모니터링** (부하 실험은 M7 AWS) |
+| **노드 3** | **노드 3 × 4GiB (기본) / 8GiB (실험)**, 노드당 2 vCPU | **고가용성 구성** (+ 실험 시 모니터링). 부하 실험은 M7 AWS |
 
 > **limit을 request의 2배로 잡는 이유** — .NET은 GC 특성상 순간적으로 메모리를
 > 더 쓸 수 있다. limit이 request와 같으면 OOMKilled가 자주 발생한다.
@@ -325,7 +324,7 @@ k3s 기본 `local-path`는 노드 로컬 디렉터리를 쓴다. **노드가 바
 | RabbitMQ | 노드마다 1개, local PV `/data/rabbitmq` (08 §10) |
 | Redis | 노드마다 1개, local PV `/data/redis`, AOF everysec. 정합성은 Simulator 재주장 (01·08) |
 | Sentinel | 노드마다 1개, local PV `/data/sentinel` (설정 파일 재기록 보존) |
-| Prometheus | node-3 local-path PVC (보존 7일) |
+| Prometheus | node-3 local-path PVC (보존 2일, 실험 구성) |
 | MinIO | 용량 큰 디스크 경로 지정 |
 
 ```yaml
