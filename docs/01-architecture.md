@@ -422,13 +422,55 @@ Redis가 비거나 장애 조치로 최근 틱이 빠지면 그 상태로 이동
 
 ## PostgreSQL 설계
 
-### 테이블
+### 테이블 키 정책
+
+| 구분 | PK | 이유 |
+|---|---|---|
+| **사실 · 이벤트** (`simulations` · `robot_telemetry` · `task_history` · `conflict_log` · `replan_log` · `metrics_minute` · `run_metrics`, 10의 영수증 · `robot_state`) | **자연키** (`run_id` · `event_id` · `robot_id` · `task_id` TEXT) | **멱등 키가 이벤트에서 온다.** 숫자 PK면 적재마다 코드→ID 조회가 필요하고, 기준정보가 없으면 **적재 실패 → DLQ**가 된다. 유실 0이 우선이다 |
+| **기준정보** 7개 (`lines` · `equipment_types` · `equipment` · `maps` · `stations` · `task_patterns` · `task_pattern_flows`) | **숫자 대리키** `BIGINT GENERATED ALWAYS AS IDENTITY` + **비즈니스 코드 `*_code` UNIQUE** | 사람이 읽는 코드(`"EQ-01"`)는 바뀔 수 있다. 재명명해도 과거 이력이 따라오려면 PK가 불변이어야 한다 |
+
+| 명명 | |
+|---|---|
+| 기준정보 숫자 PK | `line_id` · `equip_type_id` · `equip_id` · `map_id` · `station_id` · `pattern_id` · `flow_id` |
+| 비즈니스 코드 | `line_code` · `equip_type_code` · `equip_code` · `map_code` · `station_code` · `pattern_code` |
+| **사실 테이블의 맵 참조** | **`map_code TEXT`** — 기준정보의 숫자 `map_id`와 겹치지 않게 개명. **이벤트 봉투의 `mapId`(03)는 그대로**(외부 계약, Redis 키 · 큐 라우팅 키). 워커가 적재할 때 `map_code`에 넣는다 |
+
+> **키에 `run_id`가 선두로 들어가는 이유** — `tick`과 `taskId`는 run마다 0부터 다시 시작한다.
+> `run_id`가 없으면 `task_history`는 단조 upsert에 막혀 **조용히 무시**되고,
+> `robot_state`는 이전 run의 상태 때문에 전이 검증이 전부 실패한다(10 §6).
+> 실험 질의가 전부 "이 run의"로 시작하므로 **인덱스 선두**여야 한다.
+
+### 사실 · 이벤트 테이블
 
 ```sql
+-- run 메타 · 실험 조건. run_id는 Simulator가 만들어 03 봉투로 보내고, seq는 DB가 매기는 순번(보고서의 "N회차")
+CREATE TABLE simulations (
+    run_id        TEXT PRIMARY KEY,
+    seq           BIGSERIAL UNIQUE,
+    map_code      TEXT NOT NULL,
+    environment   TEXT,              -- local | aws (03 SimulationStarted)
+    line_code     TEXT,
+    pattern_code  TEXT,
+    map_version   INT,
+    map_hash      TEXT,
+    robots        INT,
+    speed         REAL,
+    tick_ms       INT,
+    task_seed     BIGINT,
+    params        JSONB,             -- 04 설정값 13종 스냅샷
+    started_at    TIMESTAMPTZ,
+    ended_at      TIMESTAMPTZ,
+    ticks         BIGINT,
+    tasks_created INT, tasks_completed INT, tasks_failed INT,
+    overruns      BIGINT,
+    end_reason    TEXT               -- max_ticks | stopped | faulted
+);
+
 -- 로봇 위치 이력 (대용량 · 파티셔닝)
 CREATE TABLE robot_telemetry (
     id          BIGSERIAL,
-    map_id      TEXT        NOT NULL,
+    run_id      TEXT        NOT NULL,
+    map_code    TEXT        NOT NULL,
     robot_id    TEXT        NOT NULL,
     tick        BIGINT      NOT NULL,
     x           SMALLINT    NOT NULL,
@@ -444,14 +486,21 @@ CREATE TABLE robot_telemetry_20260401
     PARTITION OF robot_telemetry
     FOR VALUES FROM ('2026-04-01') TO ('2026-04-02');
 
+-- 텔레메트리 중복 방지: run_id 선두, 파티션 키 occurred_at 포함 필수
+CREATE UNIQUE INDEX ux_robot_telemetry_natural
+    ON robot_telemetry (run_id, robot_id, tick, occurred_at);
+
 -- 작업 이력
 CREATE TABLE task_history (
-    task_id      TEXT PRIMARY KEY,
-    map_id       TEXT NOT NULL,
+    run_id       TEXT NOT NULL,
+    task_id      TEXT NOT NULL,
+    map_code     TEXT NOT NULL,
     robot_id     TEXT,
     task_type    SMALLINT NOT NULL,
     origin_x     SMALLINT, origin_y SMALLINT,
     dest_x       SMALLINT, dest_y SMALLINT,
+    origin_station_code TEXT, dest_station_code TEXT,   -- 03 TransportTask 설비 식별자
+    origin_equip_code   TEXT, dest_equip_code   TEXT,
     created_at   TIMESTAMPTZ NOT NULL,
     assigned_at  TIMESTAMPTZ,
     started_at   TIMESTAMPTZ,
@@ -459,30 +508,49 @@ CREATE TABLE task_history (
     status       SMALLINT NOT NULL,
     path_length  INT,          -- 계획 경로 길이
     actual_steps INT,          -- 실제 이동 칸 수
-    wait_ms      INT           -- 충돌 대기 누적
+    wait_ms      INT,          -- 충돌 대기 누적
+    PRIMARY KEY (run_id, task_id)
 );
 
--- 텔레메트리 중복 방지 (파티션 키 포함 필수)
-CREATE UNIQUE INDEX ux_robot_telemetry_natural
-    ON robot_telemetry (map_id, robot_id, tick, occurred_at);
-
--- 충돌 이력
+-- 충돌 · 교착 이력. PK · UNIQUE는 그대로(event_id = {batchId}/{index}, batchId가 UUIDv7이라 run 간 충돌 없음)
 CREATE TABLE conflict_log (
-    id            BIGSERIAL PRIMARY KEY,
-    event_id      TEXT NOT NULL UNIQUE,   -- "{batchId}/{index}" — 워커 2차 멱등
-    map_id        TEXT NOT NULL,
-    tick          BIGINT NOT NULL,
-    conflict_type SMALLINT NOT NULL,   -- vertex / edge / deadlock
-    x             SMALLINT, y SMALLINT,
-    robot_ids     TEXT[] NOT NULL,
-    resolution    SMALLINT,            -- wait / reroute / yield
-    wait_ms       INT,
-    occurred_at   TIMESTAMPTZ NOT NULL
+    id                BIGSERIAL PRIMARY KEY,
+    event_id          TEXT NOT NULL UNIQUE,   -- "{batchId}/{index}" — 워커 2차 멱등
+    run_id            TEXT NOT NULL,
+    map_code          TEXT NOT NULL,
+    tick              BIGINT NOT NULL,
+    conflict_type     SMALLINT NOT NULL,   -- vertex / edge / following / deadlock
+    x                 SMALLINT, y SMALLINT,
+    robot_ids         TEXT[] NOT NULL,
+    resolution        SMALLINT,            -- wait / reroute / yield / failed
+    wait_ms           INT,                 -- 충돌 대기(ConflictDetected)
+    resolved_ms       INT,                 -- 교착 해소 시간(DeadlockDetected) — 05 "교착 해소 시간"
+    yield_robot_id    TEXT,
+    yield_to_x        SMALLINT, yield_to_y SMALLINT,
+    searched_distance SMALLINT,
+    occurred_at       TIMESTAMPTZ NOT NULL
 );
+CREATE INDEX ix_conflict_log_run ON conflict_log (run_id);
+
+-- 재계획 이력 (05 재계획률 · 실험 5 · M9 replan_storm)
+CREATE TABLE replan_log (
+    event_id    TEXT PRIMARY KEY,
+    run_id      TEXT NOT NULL,
+    map_code    TEXT NOT NULL,
+    robot_id    TEXT NOT NULL,
+    task_id     TEXT,
+    tick        BIGINT NOT NULL,
+    reason      SMALLINT NOT NULL,   -- blocked | deadlock | map_changed
+    old_length  INT, new_length INT,
+    compute_ms  REAL,
+    occurred_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX ix_replan_log_run ON replan_log (run_id);
 
 -- 집계 (분 단위 롤업)
 CREATE TABLE metrics_minute (
-    map_id      TEXT NOT NULL,
+    run_id      TEXT NOT NULL,
+    map_code    TEXT NOT NULL,
     robot_id    TEXT NOT NULL,
     minute      TIMESTAMPTZ NOT NULL,
     move_ms     INT NOT NULL DEFAULT 0,
@@ -490,11 +558,204 @@ CREATE TABLE metrics_minute (
     wait_ms     INT NOT NULL DEFAULT 0,
     idle_ms     INT NOT NULL DEFAULT 0,
     task_count  INT NOT NULL DEFAULT 0,
-    PRIMARY KEY (map_id, robot_id, minute)
+    PRIMARY KEY (run_id, robot_id, minute)
+);
+
+-- run 단위 결과 집계. simulations는 조건(입력), run_metrics는 결과 — 지표 정의가 바뀌어도 재집계만 한다
+CREATE TABLE run_metrics (
+    run_id        TEXT PRIMARY KEY,
+    -- 시간 분해 (전체 로봇 합)
+    move_ms BIGINT, work_ms BIGINT, wait_ms BIGINT, idle_ms BIGINT,
+    utilization   REAL,   -- (move+work)/전체
+    wait_ratio    REAL,   -- 혼잡 손실률
+    idle_ratio    REAL,
+    -- 대기
+    wait_count    INT,    -- conflict_log 건수(대기 구간당 ConflictDetected 1건)
+    wait_ms_avg   REAL,   -- wait_ms / wait_count
+    -- 작업
+    throughput_per_hour REAL,
+    lead_time_p50 INT, lead_time_p90 INT, lead_time_p99 INT,
+    path_efficiency REAL, -- SUM(path_length)/SUM(actual_steps)
+    task_failed_ratio REAL,
+    -- 알고리즘 품질
+    conflict_count INT, deadlock_count INT, deadlock_resolve_ms_avg REAL,
+    replan_count INT, replan_per_task REAL,
+    -- 시스템
+    tick_overruns BIGINT, stall_ms BIGINT,
+    computed_at   TIMESTAMPTZ
 );
 ```
 
+| 결정 | 근거 |
+|---|---|
+| `simulations`는 **워커가** `SimulationStarted` · `SimulationEnded`로 upsert | Simulator는 PostgreSQL에 붙지 않는다(단방향). run 등록도 이벤트로 한다 |
+| **DB가 run 번호를 매기지 않는다** — `seq`는 보고서용 순번일 뿐 | 워커가 적재 시점에 "현재 run"을 조회하면 ① 송신 버퍼 60초 때문에 전환 경계가 섞이고 ② 워커 2대가 다른 시점에 조회하며 ③ 멱등 재처리 때 같은 `eventId`에 다른 run이 붙는다 |
+| `map_code`는 PK에서 빠지지만 **컬럼으로 남긴다** | `run_id`가 맵을 결정한다. Reconcile telemetry 질의가 쓴다 |
+| `resolvedMs`를 `wait_ms`에 넣지 않는다 | 충돌 대기와 의미가 다르다. 05가 "교착 해소 시간 = 평균 `resolvedMs`"를 알고리즘 품질의 직접 지표로 둔다 |
+| `run_metrics`의 `wait_ms_avg`를 따로 둔다 | 총 대기가 같아도 "짧게 자주"(혼잡)와 "길게 가끔"(교착 · 양보 실패)은 처방이 다르다 |
+| `run_metrics` 집계 시점 = **Reconcile 차집합 0 확인 뒤** | `SimulationEnded` 직후에는 다른 파티션의 telemetry가 아직 적재 중일 수 있다(10 §10) |
+
 이벤트 영수증(`task_event_log` · `robot_status_log`), 전이 검증 상태(`robot_state`), DEFAULT 파티션, 마이그레이션 이력은 10 §8.
+
+### 기준정보 — 라인 · 맵 · 설비 · 작업
+
+03 맵 파일의 `stations` · `equipmentId`는 이미 있지만 `equipmentId`의 **마스터**가 없고, 작업은 **좌표만** 든다.
+05 실험 4(맵 3종 비교)는 맵이 바뀌면 좌표가 바뀌므로 **같은 설비 쌍**의 작업이 재현돼야 조작 변수가 통로 폭 하나가 된다.
+
+```
+line (라인)
+ ├─ map (맵, 버전)
+ │   ├─ station  ──► equipment ──► equipment_type
+ │   ├─ charger
+ │   └─ parking
+ └─ task_pattern (공정 흐름)
+     └─ flow: from_equipment → to_equipment, 비율, 우선순위
+```
+
+```sql
+CREATE TABLE lines (
+    line_id     BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    line_code   TEXT NOT NULL,                    -- "L-A"
+    name        TEXT NOT NULL,
+    description TEXT,
+    active      BOOLEAN NOT NULL DEFAULT true,
+    CONSTRAINT uq_lines_code UNIQUE (line_code),
+    CONSTRAINT uq_lines_name UNIQUE (name)
+);
+
+CREATE TABLE equipment_types (
+    equip_type_id   BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    equip_type_code TEXT NOT NULL,                -- "press" | "inspect" | "buffer"
+    name            TEXT NOT NULL,
+    default_work_ms INT  NOT NULL DEFAULT 2000,
+    CONSTRAINT uq_equip_types_code UNIQUE (equip_type_code),
+    CONSTRAINT uq_equip_types_name UNIQUE (name),
+    CONSTRAINT ck_equip_types_work CHECK (default_work_ms >= 0)
+);
+
+CREATE TABLE equipment (
+    equip_id      BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    equip_code    TEXT   NOT NULL,                -- "EQ-01" — 맵 파일이 쓰는 값
+    line_id       BIGINT NOT NULL REFERENCES lines(line_id),
+    equip_type_id BIGINT NOT NULL REFERENCES equipment_types(equip_type_id),
+    name          TEXT   NOT NULL,
+    work_ms       INT    NOT NULL DEFAULT 2000,
+    capacity      INT    NOT NULL DEFAULT 1,
+    active        BOOLEAN NOT NULL DEFAULT true,
+    CONSTRAINT uq_equipment_code     UNIQUE (equip_code),
+    CONSTRAINT uq_equipment_name     UNIQUE (line_id, name),   -- 라인 안에서 설비명 유일
+    CONSTRAINT ck_equipment_capacity CHECK (capacity >= 1),
+    CONSTRAINT ck_equipment_work     CHECK (work_ms  >= 0)
+);
+
+CREATE TABLE maps (
+    map_id      BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    map_code    TEXT   NOT NULL,                  -- "factory-a" — 이벤트의 mapId
+    version     INT    NOT NULL,
+    line_id     BIGINT NOT NULL REFERENCES lines(line_id),
+    name        TEXT   NOT NULL,
+    width       SMALLINT NOT NULL, height SMALLINT NOT NULL,
+    cell_size_m REAL   NOT NULL DEFAULT 1.0,
+    grid        JSONB  NOT NULL,
+    map_hash    TEXT   NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_maps_code_version UNIQUE (map_code, version),   -- 같은 맵의 같은 버전 금지
+    CONSTRAINT uq_maps_code_hash    UNIQUE (map_code, map_hash),  -- 같은 내용을 두 버전으로 금지
+    CONSTRAINT uq_maps_line_name_ver UNIQUE (line_id, name, version),
+    CONSTRAINT ck_maps_size    CHECK (width > 0 AND height > 0 AND cell_size_m > 0),
+    CONSTRAINT ck_maps_version CHECK (version >= 1)
+);
+
+CREATE TABLE stations (
+    station_id   BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    station_code TEXT   NOT NULL,                 -- "ST-01" | "CH-01" | "PK-01"
+    map_id       BIGINT NOT NULL REFERENCES maps(map_id) ON DELETE CASCADE,
+    kind         SMALLINT NOT NULL,               -- 2=Station 3=Charge 4=Parking (03)
+    equip_id     BIGINT REFERENCES equipment(equip_id),   -- Charge · Parking 은 NULL
+    io_type      TEXT,                            -- pickup | dropoff
+    x SMALLINT NOT NULL, y SMALLINT NOT NULL,
+    CONSTRAINT uq_stations_code UNIQUE (map_id, station_code),
+    CONSTRAINT uq_stations_cell UNIQUE (map_id, x, y),   -- 한 칸에 접점 둘 금지
+    CONSTRAINT ck_stations_kind CHECK (kind IN (2, 3, 4)),
+    CONSTRAINT ck_stations_xy   CHECK (x >= 0 AND y >= 0),
+    CONSTRAINT ck_stations_equipment CHECK (
+        (kind = 2 AND equip_id IS NOT NULL AND io_type IN ('pickup','dropoff'))
+     OR (kind IN (3,4) AND equip_id IS NULL AND io_type IS NULL))
+);
+
+CREATE TABLE task_patterns (
+    pattern_id   BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    pattern_code TEXT   NOT NULL,                 -- "P-A-standard"
+    line_id      BIGINT NOT NULL REFERENCES lines(line_id),
+    name         TEXT   NOT NULL,
+    active       BOOLEAN NOT NULL DEFAULT true,
+    CONSTRAINT uq_patterns_code UNIQUE (pattern_code),
+    CONSTRAINT uq_patterns_name UNIQUE (line_id, name)
+);
+
+CREATE TABLE task_pattern_flows (
+    flow_id        BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    pattern_id     BIGINT NOT NULL REFERENCES task_patterns(pattern_id) ON DELETE CASCADE,
+    seq            INT    NOT NULL,
+    from_equip_id  BIGINT NOT NULL REFERENCES equipment(equip_id),
+    to_equip_id    BIGINT NOT NULL REFERENCES equipment(equip_id),
+    weight         REAL     NOT NULL DEFAULT 1,
+    priority       SMALLINT NOT NULL DEFAULT 0,   -- 0=normal 1=high (03)
+    CONSTRAINT uq_flow_seq      UNIQUE (pattern_id, seq),
+    CONSTRAINT uq_flow          UNIQUE (pattern_id, from_equip_id, to_equip_id, priority),
+    CONSTRAINT ck_flow_distinct CHECK (from_equip_id <> to_equip_id),
+    CONSTRAINT ck_flow_weight   CHECK (weight > 0),
+    CONSTRAINT ck_flow_priority CHECK (priority IN (0, 1))
+);
+```
+
+| 테이블 | 중복 금지 | 근거 |
+|---|---|---|
+| `lines` | 코드 · 라인명 | |
+| `equipment_types` | 코드 · 종류명 | |
+| `equipment` | 코드 / **`(라인, 설비명)`** | 설비 코드는 전역 유일, 설비명은 **라인 안에서** 유일 |
+| `maps` | **`(map_code, version)`** / **`(map_code, map_hash)`** | 같은 버전 재등록 금지 · 같은 내용을 두 버전으로 올리는 실수 금지 |
+| **`stations`** | **`(map_id, x, y)`** / `(map_id, station_code)` | **한 칸에 접점이 둘일 수 없다** |
+| `task_patterns` | 코드 / `(라인, 패턴명)` | |
+| **`task_pattern_flows`** | `(패턴, seq)` / **`(패턴, from, to, 우선순위)`** | 같은 흐름 중복 정의 금지. 우선순위가 다르면 별개 |
+
+| CHECK | 내용 |
+|---|---|
+| **`ck_flow_distinct`** | **`from ≠ to`** — 03의 "출발지 · 목적지가 같으면 재추첨"을 DB가 강제한다 |
+| `ck_stations_equipment` | `kind=Station`이면 설비 · `io_type` 필수, `Charge` · `Parking`이면 둘 다 NULL |
+| `ck_stations_kind` · `ck_flow_priority` | 2 · 3 · 4 / 0 · 1 — **03의 enum과 일치** |
+| `ck_equipment_capacity` · `ck_maps_size` · `ck_flow_weight` | `>= 1` · `> 0` |
+
+> **크로스 테이블 검증은 CHECK로 못 한다**(`stations.x < maps.width` 같은 것). 적재 시점에는 시드 스크립트가,
+> 이후에는 맵 검증기(06 맵 검증 규칙과 같은 검사 + 연결성 · 1칸 통로 · 막다른 길 깊이 · Parking 수 ≥ 로봇 수)가 맡는다.
+
+| FK | 걸까 | 이유 |
+|---|---|---|
+| **기준정보끼리** | **건다** | 시드 스크립트로 미리 일괄 적재되므로 순서가 보장된다 |
+| **큐에서 적재되는 테이블(`simulations` · `task_history` 등) → 기준정보** | **걸지 않는다** | 기준정보가 없으면 FK 위반 → 반환 → **DLQ**. 대신 코드를 문자열로 저장 + `mapHash` 대조 + **경고 로그** |
+| `ON DELETE CASCADE` | **맵 하위(`stations`)에만** | `equipment` · `lines` · `task_patterns`는 **삭제하지 않는다** — 과거 run의 해석이 깨진다. 쓰지 않게 되면 `active = false` |
+
+| 역할 | 어디 |
+|---|---|
+| **정본** | `maps/*.json` · `master/*.json` — git에서 버전 관리. 맵 파일 구조는 바꾸지 않는다 |
+| 적재본 | 위 기준정보 테이블 — 질의 · 조인 · 재생기용 |
+| 적재 경로 | 마이그레이션 / 시드 스크립트 (`db/seed/`) |
+| run과의 대조 | `SimulationStarted.payload`의 `lineId` · `mapId` · `mapVersion` · **`mapHash`** · `taskPatternId`(03). DB 해시와 다르면 경고 |
+
+분석 질의는 코드로 조인한다.
+
+```sql
+SELECT e.name, COUNT(*) AS tasks
+FROM   task_history t
+JOIN   equipment    e ON e.equip_code = t.dest_equip_code
+WHERE  t.run_id = $1
+GROUP  BY e.name;
+```
+
+> **`run_id` · 설비 코드 · 기준정보는 M3 마이그레이션(`001_schema.sql`)에 함께 넣는다.** M7에서 넣으면 PK 드롭 + 백필 + 재생성을
+> 파티션마다 반복해야 하고, 그때까지 쌓인 데이터는 어느 run · 어느 설비였는지 알 수 없어 **백필 자체가 불가능**하다.
+> **로봇 수 변경 기능(run 전환)은 이 작업이 끝난 뒤에만 구현한다** — 먼저 넣으면 위 두 증상(`robot_state` 전원 invalid,
+> `task_history` 조용한 오염)이 그대로 발생한다.
 
 ### 텔레메트리 적재 전략
 
@@ -557,10 +818,11 @@ ack 전 메시지 재전달. 세 경우 모두 **같은 `eventId`가 두 번 온
 
 | 테이블 | 유니크 키 | 충돌 시 | 근거 |
 |---|---|---|---|
-| `task_history` | `task_id` | `ON CONFLICT DO UPDATE ... WHERE excluded.status > task_history.status` | 작업은 상태가 단조 증가. 늦게 온 낮은 상태는 무시 |
-| `conflict_log` | `event_id` | `ON CONFLICT DO NOTHING` | 같은 충돌을 두 번 세면 교착 발생률이 틀어진다 |
-| `robot_telemetry` | `(map_id, robot_id, tick, occurred_at)` | `ON CONFLICT DO NOTHING` | 자연 키. 한 로봇은 틱당 1행. `occurred_at`은 파티션 키라 포함해야 함 |
-| `metrics_minute` | `(map_id, robot_id, minute)` | 같은 트랜잭션의 원본 INSERT `ON CONFLICT DO NOTHING RETURNING`으로 **새로 들어간 행만** 가산 (10 §6) | 집계는 되돌릴 수 없으므로 적용 전에 거른다. 별도 적용 집합 없이 원본 행 삽입과 원자적 |
+| `task_history` | `(run_id, task_id)` | `ON CONFLICT DO UPDATE ... WHERE excluded.status > task_history.status` | 작업은 상태가 단조 증가. 늦게 온 낮은 상태는 무시. 키에 `run_id`가 들어가 run 간 충돌은 없다 |
+| `conflict_log` | `event_id` (변경 없음) | `ON CONFLICT DO NOTHING` | 같은 충돌을 두 번 세면 교착 발생률이 틀어진다 |
+| `replan_log` | `event_id` | `ON CONFLICT DO NOTHING` | 재계획률(05)이 부풀지 않게 |
+| `robot_telemetry` | `(run_id, robot_id, tick, occurred_at)` | `ON CONFLICT DO NOTHING` | 자연 키. 한 로봇은 run · 틱당 1행. `occurred_at`은 파티션 키라 포함해야 함 |
+| `metrics_minute` | `(run_id, robot_id, minute)` | 같은 트랜잭션의 원본 INSERT `ON CONFLICT DO NOTHING RETURNING`으로 **새로 들어간 행만** 가산 (10 §6) | 집계는 되돌릴 수 없으므로 적용 전에 거른다. 별도 적용 집합 없이 원본 행 삽입과 원자적 |
 
 > **텔레메트리까지 막는 이유** — "유실 허용"이지 "중복 허용"이 아니다. 중복 행은
 > 통행량 히트맵과 시간 분해를 부풀린다. 자연 키 제약은 배치 INSERT에서 `ON CONFLICT`
