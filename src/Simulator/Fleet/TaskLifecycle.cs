@@ -149,6 +149,14 @@ internal sealed class TaskLifecycle : IRobotObserver
                 return Array.Empty<string>();
             case DeadlockPhase.Failed:
                 EmitDeadlock(info);
+                // TTL 만료(양보가 안 끝남) = YieldRobotId 있음: 이벤트만, 양보 로봇은 재계획으로 복귀(13 §5). 작업은 실패시키지 않는다.
+                // 회피 지점 없음 = YieldRobotId null: 순환 전원 실패
+                if (info.YieldRobotId is { } ttlYield)
+                {
+                    if (_runs.TryGetValue(ttlYield, out var tr)) tr.Yielding = false;
+                    return Array.Empty<string>();
+                }
+
                 return FailCycle(info, tick);
             default:
                 return Array.Empty<string>();

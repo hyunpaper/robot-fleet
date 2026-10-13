@@ -129,12 +129,16 @@ public class MultiRobotTests
     // 교착 탐지·해소를 켠 배선(DeadlockOptions + 맵 등록 + TaskLifecycle 관찰자 + EventCollector). WorkMs=0으로 체류 즉시
     private static async Task<(IReadOnlyList<TransportTask> Tasks, IReadOnlyList<Robot> Robots, List<EventItem> Events)> RunDeadlock(
         GridMap map, int maxTicks, params (string Id, Point Start, Heading Heading, Point Goal)[] specs)
+        => await RunDeadlock(map, maxTicks, new DeadlockOptions(), specs);
+
+    private static async Task<(IReadOnlyList<TransportTask> Tasks, IReadOnlyList<Robot> Robots, List<EventItem> Events)> RunDeadlock(
+        GridMap map, int maxTicks, DeadlockOptions deadlockOptions, params (string Id, Point Start, Heading Heading, Point Goal)[] specs)
     {
         var options = new FleetOptions { WorkMs = 0, TickMs = 100, SpeedFactor = 0, Robots = specs.Length };
         var planner = new AStarPathPlanner();
         var collector = new EventCollector(map.MapId, "r1", options.TickMs, TimeProvider.System);
         var lifecycle = new TaskLifecycle(map, planner, options, collector);
-        var arbiter = new InMemoryMoveArbiter(new DeadlockOptions(), options.TickMs);
+        var arbiter = new InMemoryMoveArbiter(deadlockOptions, options.TickMs);
         arbiter.RegisterMap(map);
         var simOptions = new SimulationOptions { MapPath = "", Goal = default, TickMs = options.TickMs, SpeedFactor = 0 };
         var stepper = new RobotStepper(map, planner, arbiter, simOptions, new SimulationStats(), null, lifecycle);
@@ -210,21 +214,25 @@ public class MultiRobotTests
     }
 
     [Fact]
-    public async Task DL09_ThreeVersusOne_NoPingPongOrStarvation()
+    public async Task DL09_ThreeVersusOne_NoPingPongAndFiniteTermination()
     {
-        // 동쪽 3대 행렬 대 서쪽 1대. 포켓 (2,1)·(5,1). 1칸 통로라 전원 완료는 불가(완료 로봇이 통로를 막는다) —
-        // 핵심은 핑퐁·기아 없음: 해소가 일어나고, 같은 로봇이 무한 양보하지 않으며, 재탐지가 폭주하지 않는다
-        var (_, _, events) = await RunDeadlock(TestMaps.TwoPocketCorridor(), 400,
-            ("R-001", new(3, 0), Heading.East, new(5, 0)),
-            ("R-002", new(2, 0), Heading.East, new(6, 0)),
-            ("R-003", new(1, 0), Heading.East, new(7, 0)),
-            ("R-004", new(4, 0), Heading.West, new(0, 0)));
+        // 동쪽 1대(R-001) 대 서쪽 3대 행렬. 통로 중앙 포켓 (4,1)로 R-001이 양보하면 서쪽 3대가 지나가 서쪽에 주차하고,
+        // R-001은 다시 동쪽 끝으로 간다 — 완료 로봇이 R-001의 복귀 경로를 막지 않도록 목적지를 배치했다
+        var map = TestMaps.Unchecked("1111111111", "0000100000");   // 포켓 (4,1)
+        var (tasks, robots, events) = await RunDeadlock(map, 600,
+            ("R-001", new(5, 0), Heading.East, new(9, 0)),
+            ("R-002", new(6, 0), Heading.West, new(0, 0)),
+            ("R-003", new(7, 0), Heading.West, new(1, 0)),
+            ("R-004", new(8, 0), Heading.West, new(2, 0)));
 
         var deadlocks = Deadlocks(events);
         deadlocks.Should().NotBeEmpty("해소가 일어나야 한다");
+        // 같은 로봇의 양보는 재계획 상한(replan_max_per_task=5)에 묶여 유한하다 — 무한 핑퐁 없음
         deadlocks.Where(d => d.Resolution == "yield")
-            .GroupBy(d => d.YieldRobotId).Should().OnlyContain(g => g.Count() <= 3, "같은 로봇이 무한 양보하지 않는다");
-        deadlocks.Count.Should().BeLessThan(12, "재탐지 폭주가 없다");
+            .GroupBy(d => d.YieldRobotId).Should().OnlyContain(g => g.Count() <= new FleetOptions().ReplanMaxPerTask);
+        // 유한 틱 종료: 모든 작업이 끝 상태, 작업을 든 채 멈춘 로봇 없음
+        tasks.Should().OnlyContain(t => t.Status == TaskStatus.Completed || t.Status == TaskStatus.Failed, "모든 작업이 끝 상태");
+        robots.Should().OnlyContain(r => r.Status != RobotStatus.Waiting, "작업을 든 채 대기하는 로봇이 없다");
     }
 
     [Fact]
@@ -239,6 +247,23 @@ public class MultiRobotTests
         events.Count(e => e.EventType == EventType.PathReplanned
                           && StoreMapping.Read<PathReplannedPayload>(e.Payload).Reason == "blocked").Should().BeGreaterThan(0);
         events.Should().NotContain(e => e.EventType == EventType.DeadlockDetected, "대안이 있으면 교착이 아니다");
+    }
+
+    [Fact]
+    public async Task DL_TtlExpiry_EmitsFailedButDoesNotFailTasks()
+    {
+        // 포켓은 가깝지만 TTL을 짧게 둬 양보가 회전 지연으로 제때 못 끝나게 한다. TTL 만료 failed(양보 로봇 있음)는
+        // 정상 로봇 작업을 실패시키지 않고(13 §5), 양보 로봇은 재계획으로 복귀해 결국 완료된다
+        var opts = new DeadlockOptions { YieldSearchMaxDistance = 1, DeadlockResolveTtlTicks = 10 };
+        var (tasks, _, events) = await RunDeadlock(TestMaps.Unchecked("11111", "00100"), 500, opts,
+            ("R-001", new(1, 0), Heading.East, new(4, 0)),
+            ("R-002", new(2, 0), Heading.West, new(0, 0)));
+
+        var deadlocks = Deadlocks(events);
+        deadlocks.Should().Contain(d => d.Resolution == "failed" && d.YieldRobotId != "", "TTL 만료 failed는 양보 로봇을 싣는다");
+        events.Should().NotContain(e => e.EventType == EventType.TaskFailed
+            && StoreMapping.Read<TaskFailedPayload>(e.Payload).Reason == "deadlock_unresolved", "정상 로봇을 실패시키지 않는다");
+        tasks.Should().OnlyContain(t => t.Status == TaskStatus.Completed, "양보 로봇이 복귀해 둘 다 완료");
     }
 
     [Fact]

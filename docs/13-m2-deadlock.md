@@ -330,6 +330,10 @@ public sealed record DeadlockOptions   // 04 설정값 9~13
 | 혼합 상태 방어 | 양보·실패는 **`Reported == Waiting`인 로봇에만** 상태 전이. 이미 Moving이면 경로만 바꾸고 실패 대상에서 뺀다 | 03 전이표 밖(Moving→Error deadlock_unresolved 등) 전이를 내지 않는다 |
 | 03 추가 | `Waiting → Error (replan_exceeded)` 전이 1개 추가(전이표 25개) | M2는 재계획 상한을 **대기 중** 소진한다(기존 `replan_exceeded`는 Moving→Error만) |
 | payload 타입 | `DeadlockDetectedPayload.YieldRobotId`는 **non-null `string`**(빈 값), `YieldToX/Y`는 `int` 유지 | `StoreMapping`이 빈 값·0을 NULL로 정규화(P1-2)해 DB·M9 판정이 동일. `string?`로 안 바꿔 해소기·직렬화 단순 |
+| TTL 만료 failed 처리 | TTL 만료 failed(`YieldRobotId != null`)는 **이벤트만** 발행하고 양보 로봇의 `Yielding`을 풀어 재계획으로 복귀시킨다. **작업을 실패시키지 않는다**(`FailCycle`은 회피 지점 없음 = `YieldRobotId == null`일 때만) | TTL 만료는 "양보가 제때 못 끝남"일 뿐 순환의 다른 로봇은 정상이다. 전원 실패는 집합이 애초에 풀 수 없을 때만 |
+| 대안 재계획 반복 종료 | 한 구성원이 대안 재계획에 계속 성공해 `WaitMs`가 0으로 돌아가면 교착으로 안 잡히고(대기가 임계에 못 미침), 재계획 횟수가 `replan_max_per_task`를 넘으면 `replan_exceeded`로 **유한 종료** | 과도기 반복이 무한 루프가 되지 않는다. deadlock 사유 양보도 같은 상한에 센다(§6·§7) |
+| `_drained` 수명 | 드레인 멱등 캐시는 run 단위다. **M4 run 전환(02 run 관리 4단계: 맵 해시 초기화·epoch 증가)에서 해소기 상태(락·양보 표시·드레인 캐시)를 함께 초기화**한다 | run이 바뀌면 이전 교착 상태가 남으면 안 된다(04 run 전환 불변식) |
+| M4 요청 계약 | §6a 재계획의 **막힌 칸 목록을 M4 `/paths/batch` 요청 계약에 포함**한다(지금은 `IPathPlanner.FindPath(blocked)` 인자) | M4에서 계획을 HTTP로 분리해도 장애물 주입이 이어지게 |
 
 > **`failed` 두 뜻 구분.** TTL 만료로 닫힌 failed는 **`yield_robot_id`가 있다**(양보를 시작했으나 못 끝냄). 회피 지점이 아예
 > 없어 닫힌 failed는 **`yield_robot_id`가 NULL**(§5 failed, P1-2). 그래서 M9 `no_yield_point` 판정은

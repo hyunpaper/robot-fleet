@@ -4,7 +4,7 @@ namespace RobotFleet.FleetController.Arbitration;
 public static class DeadlockGraph
 {
     /// waitEdges: robotId → blockedBy(이번 틱 거부만). waitMs: robotId → 누적 대기ms.
-    /// 반환: 서로소 순환들(각 순환은 thresholdMs 이상 대기 로봇을 하나 이상 포함). 각 순환은 최소 robotId에서 시작하도록
+    /// 반환: 서로소 순환들(각 순환은 전원이 thresholdMs 이상 대기). 각 순환은 최소 robotId에서 시작하도록
     /// 회전하고, 순환 목록은 그 첫 원소로 정렬 — 시작 순서·요청 순서와 무관하게 결정적(13 §9)
     public static IReadOnlyList<IReadOnlyList<string>> FindCycles(
         IReadOnlyDictionary<string, string> waitEdges, IReadOnlyDictionary<string, int> waitMs, int thresholdMs)
