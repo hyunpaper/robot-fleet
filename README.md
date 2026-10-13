@@ -15,16 +15,16 @@
 수정안은 허용된 파라미터 안에서만 고르므로 파이프라인이 기계적으로 검증하고, 관리자는 근거를 읽고 승인만 하면 된다.
 같은 유형의 교착이 반복될수록 대응 시간은 짧아지고, 판단의 근거는 모두 기록으로 남는다.
 
-<a href="https://raw.githubusercontent.com/hyunpaper/robot-fleet/main/docs/images/fleet-loop-3d.gif"><img src="docs/images/fleet-loop-3d.gif" alt="3D 시뮬레이션"></a>
+<a href="https://raw.githubusercontent.com/hyunpaper/robot-fleet/main/docs/images/fleet-equip-3d.gif"><img src="docs/images/fleet-equip-3d.gif" alt="3D 시뮬레이션"></a>
 
 <details>
 <summary>2D 탑뷰</summary>
 
-<a href="https://raw.githubusercontent.com/hyunpaper/robot-fleet/main/docs/images/fleet-loop-2d.gif"><img src="docs/images/fleet-loop-2d.gif" alt="2D 시뮬레이션"></a>
+<a href="https://raw.githubusercontent.com/hyunpaper/robot-fleet/main/docs/images/fleet-equip-2d.gif"><img src="docs/images/fleet-equip-2d.gif" alt="2D 시뮬레이션"></a>
 
 </details>
 
-로봇 12대가 좌하단과 우상단 주차 구역에서 출발해 픽업과 드롭오프를 반복한다. 지나간 칸은 로봇 색으로 물들었다가 서서히 옅어지고, 적재 중인 로봇은 화물 상자를 싣고 이동한다. 같은 칸을 동시에 요청하면 우선순위가 낮은 로봇이 `WAIT` 상태로 양보한다.
+로봇 12대가 좌하단과 우상단 주차 구역에서 출발해 CNC·프레스·로봇 셀·조립대·포장기 등 설비의 픽업·드롭오프 지점을 오간다. 지나간 칸은 로봇 색으로 물들었다가 서서히 옅어지고, 적재 중인 로봇은 화물 상자를 싣고 이동한다. 같은 칸을 동시에 요청하면 우선순위가 낮은 로봇이 `WAIT` 상태로 양보한다. 우측 패널은 로봇을 대기와 작업 중으로 나눠 보여 준다.
 
 ---
 
