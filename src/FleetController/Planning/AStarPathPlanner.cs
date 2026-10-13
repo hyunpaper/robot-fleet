@@ -22,12 +22,13 @@ public sealed class AStarPathPlanner : IPathPlanner
                 _turnCost[from * 4 + to] = _cost.Turn((Heading)from, (Heading)to);
     }
 
-    public PathResult FindPath(GridMap map, Point start, Heading startHeading, Point goal)
+    public PathResult FindPath(GridMap map, Point start, Heading startHeading, Point goal, IReadOnlySet<Point>? blocked = null)
     {
         var startedAt = Stopwatch.GetTimestamp();
 
         if (!map.IsWalkable(start)) return PathResult.Failure(PathStatus.InvalidStart, 0, Stopwatch.GetElapsedTime(startedAt));
-        if (!map.IsWalkable(goal)) return PathResult.Failure(PathStatus.InvalidGoal, 0, Stopwatch.GetElapsedTime(startedAt));
+        if (!map.IsWalkable(goal) || blocked?.Contains(goal) == true)
+            return PathResult.Failure(PathStatus.InvalidGoal, 0, Stopwatch.GetElapsedTime(startedAt));
         if (start == goal)
         {
             return new PathResult
@@ -76,7 +77,8 @@ public sealed class AStarPathPlanner : IPathPlanner
             {
                 var nx = x + Dx[d];
                 var ny = y + Dy[d];
-                if (!map.IsWalkable(new Point(nx, ny))) continue;
+                var np = new Point(nx, ny);
+                if (!map.IsWalkable(np) || blocked?.Contains(np) == true) continue;
 
                 var nid = (ny * width + nx) * 4 + d;
                 if (closed[nid]) continue;

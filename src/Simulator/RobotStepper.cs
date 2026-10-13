@@ -95,20 +95,18 @@ public sealed class RobotStepper
 
     public enum ReplanOutcome { Applied, NoAlternative, Failed }
 
-    /// 재계획(13 §6). 현재 위치에서 goal로 다시 계획해 남은 경로와 다르면 적용(대안), 같으면 NoAlternative(대기 유지), 경로 없으면 Failed.
-    /// 적용 시 WaitMs를 0으로(§6c). 상태 통지는 호출자가 한다
+    /// 재계획(13 §6). 막힌 다음 칸을 일시 장애물로 놓고 goal로 다시 계획한다(§6a). 그 칸을 피하는 경로가 있으면 적용(대안),
+    /// 없으면 NoAlternative(대기 유지 → 교착 탐지로). 적용 시 WaitMs를 0으로(§6c). 상태 통지는 호출자가 한다
     public (ReplanOutcome Outcome, int OldLength, int NewLength, double ComputeMs) Replan(Robot robot, Point goal)
     {
-        var state = StateOf(robot);
-        var result = _planner.FindPath(_map, robot.Position, robot.Heading, goal);
+        IReadOnlySet<Point>? blocked = robot.PathIndex + 1 < robot.PlannedPath.Count
+            ? new HashSet<Point> { robot.PlannedPath[robot.PathIndex + 1].Cell }
+            : null;
+        var result = _planner.FindPath(_map, robot.Position, robot.Heading, goal, blocked);
         if (!result.IsSuccess)
-            return (ReplanOutcome.Failed, 0, 0, result.Elapsed.TotalMilliseconds);
-
-        var remaining = robot.PlannedPath.Skip(robot.PathIndex).Select(s => s.Cell).ToList();
-        if (result.Steps.Select(s => s.Cell).SequenceEqual(remaining))
             return (ReplanOutcome.NoAlternative, 0, 0, result.Elapsed.TotalMilliseconds);
 
-        var oldLength = Math.Max(0, remaining.Count - 1);
+        var oldLength = Math.Max(0, robot.PlannedPath.Count - 1 - robot.PathIndex);
         SetPath(robot, result.Steps);
         return (ReplanOutcome.Applied, oldLength, result.MoveCount, result.Elapsed.TotalMilliseconds);
     }

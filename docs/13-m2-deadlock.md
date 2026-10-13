@@ -320,6 +320,17 @@ public sealed record DeadlockOptions   // 04 설정값 9~13
 
 > 03은 `replan_exceeded`를 TaskFailed 사유에 더하는 **한 줄**만 바뀐다(전이·`deadlock_unresolved`는 이미 있음). 04·01 문서·기본값·안전성 불변식은 바꾸지 않는다. 위 구현 판단들이 리뷰 대상이다.
 
+### 구현 중 확정한 세부(2단계, 총괄 리뷰)
+
+| 지점 | 결정 | 근거 |
+|---|---|---|
+| 탐지 임계 | 순환의 **모든** 로봇이 임계 이상(초안 "하나 이상"에서 좁힘) | 진짜 교착은 동시 상호 차단. 한 대만 오래 기다린 과도기 순환을 잡으면 혼합 상태(Moving·Waiting)가 섞여 잘못된 전이가 난다 |
+| §6a 재계획 | **막은 다음 칸을 planner 장애물로 주입**해 우회를 찾는다. 피하는 경로가 없으면 NoAlternative(대기 → 교착) | `IPathPlanner.FindPath`에 선택 `blocked` 추가. planner는 점유를 모르므로 장애물 주입 없이는 같은 직선 경로만 나와 우회가 안 된다 |
+| 양보 실행 | 회피 지점을 **경유**하는 결합 경로(현재→포켓→목적지)를 통째로 심는다. 포켓에서 멈추지 않고 waypoint로 지난다 | 상태 머신을 어지럽히지 않는다(포켓에서 Loading 오인 방지). 다른 로봇이 지나갈 때까지 포켓 다음 칸에서 자연히 대기 |
+| 혼합 상태 방어 | 양보·실패는 **`Reported == Waiting`인 로봇에만** 상태 전이. 이미 Moving이면 경로만 바꾸고 실패 대상에서 뺀다 | 03 전이표 밖(Moving→Error deadlock_unresolved 등) 전이를 내지 않는다 |
+| 03 추가 | `Waiting → Error (replan_exceeded)` 전이 1개 추가(전이표 25개) | M2는 재계획 상한을 **대기 중** 소진한다(기존 `replan_exceeded`는 Moving→Error만) |
+| payload 타입 | `DeadlockDetectedPayload.YieldRobotId`는 **non-null `string`**(빈 값), `YieldToX/Y`는 `int` 유지 | `StoreMapping`이 빈 값·0을 NULL로 정규화(P1-2)해 DB·M9 판정이 동일. `string?`로 안 바꿔 해소기·직렬화 단순 |
+
 > **`failed` 두 뜻 구분.** TTL 만료로 닫힌 failed는 **`yield_robot_id`가 있다**(양보를 시작했으나 못 끝냄). 회피 지점이 아예
 > 없어 닫힌 failed는 **`yield_robot_id`가 NULL**(§5 failed, P1-2). 그래서 M9 `no_yield_point` 판정은
 > **"`resolution = failed` AND `yield_robot_id IS NULL`"**이다 — `searchedDistance = 상한`으로만 가르면 확대 범위 끝에서

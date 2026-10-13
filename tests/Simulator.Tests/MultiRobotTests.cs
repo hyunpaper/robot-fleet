@@ -4,7 +4,11 @@ using RobotFleet.FleetController.Planning;
 using RobotFleet.Shared.Domain;
 using RobotFleet.Shared.Geometry;
 using RobotFleet.Shared.Map;
+using RobotFleet.Shared.Messaging;
+using RobotFleet.Shared.Pipeline;
 using RobotFleet.Shared.Tests;
+using RobotFleet.Simulator.Events;
+using RobotFleet.Simulator.Fleet;
 using Xunit;
 using TaskStatus = RobotFleet.Shared.Domain.TaskStatus;
 
@@ -122,50 +126,135 @@ public class MultiRobotTests
         fleet.LogLines("R-002", "WAIT").Should().ContainSingle("Waiting이 이어지는 동안 WAIT는 한 번만 찍는다");
     }
 
-    private const string PendingCore = "M2 [핵심] 구현 대기";
+    // 교착 탐지·해소를 켠 배선(DeadlockOptions + 맵 등록 + TaskLifecycle 관찰자 + EventCollector). WorkMs=0으로 체류 즉시
+    private static async Task<(IReadOnlyList<TransportTask> Tasks, IReadOnlyList<Robot> Robots, List<EventItem> Events)> RunDeadlock(
+        GridMap map, int maxTicks, params (string Id, Point Start, Heading Heading, Point Goal)[] specs)
+    {
+        var options = new FleetOptions { WorkMs = 0, TickMs = 100, SpeedFactor = 0, Robots = specs.Length };
+        var planner = new AStarPathPlanner();
+        var collector = new EventCollector(map.MapId, "r1", options.TickMs, TimeProvider.System);
+        var lifecycle = new TaskLifecycle(map, planner, options, collector);
+        var arbiter = new InMemoryMoveArbiter(new DeadlockOptions(), options.TickMs);
+        arbiter.RegisterMap(map);
+        var simOptions = new SimulationOptions { MapPath = "", Goal = default, TickMs = options.TickMs, SpeedFactor = 0 };
+        var stepper = new RobotStepper(map, planner, arbiter, simOptions, new SimulationStats(), null, lifecycle);
+        lifecycle.Stepper = stepper;
 
-    [Fact(Skip = PendingCore)]
+        var tasks = new List<TransportTask>();
+        var robots = new List<Robot>();
+        foreach (var (id, start, heading, goal) in specs)
+        {
+            var robot = new Robot { RobotId = id, MapId = map.MapId, Position = start, Heading = heading };
+            tasks.Add(new TransportTask { TaskId = "T-" + id, MapId = map.MapId, Type = TaskType.Transport, Origin = start, Destination = goal });
+            arbiter.Register(map.MapId, id, start);
+            lifecycle.Add(robot);
+            robots.Add(robot);
+        }
+
+        var events = new List<EventItem>();
+        for (long tick = 1; tick <= maxTicks; tick++)
+        {
+            collector.Begin(tick, DateTimeOffset.UnixEpoch.AddMilliseconds(tick * options.TickMs));
+            if (tick == 1)
+                for (var i = 0; i < robots.Count; i++) lifecycle.Assign(robots[i], tasks[i], tick);
+            lifecycle.AdvanceDwell(tick);
+            await stepper.StepAllAsync(robots, tick);
+            lifecycle.AfterStep();
+            lifecycle.ApplyReplans(tick);
+            foreach (var b in collector.Complete(robots.Select(lifecycle.TelemetryOf))) events.AddRange(b.Events);
+            if (tasks.All(t => t.Status is TaskStatus.Completed or TaskStatus.Failed)) break;
+        }
+
+        return (tasks, robots, events);
+    }
+
+    private static IReadOnlyList<DeadlockDetectedPayload> Deadlocks(IEnumerable<EventItem> events) =>
+        events.Where(e => e.EventType == EventType.DeadlockDetected)
+            .Select(e => StoreMapping.Read<DeadlockDetectedPayload>(e.Payload)).ToList();
+
+    [Fact]
     public async Task DL07_HeadOn_WithPocket_YieldResolvesAndBothArrive()
     {
         // R-001이 포켓 (2,1) 바로 위에서 동쪽, R-002가 (3,0)에서 서쪽 — 정면 대치
-        var fleet = Create(TestMaps.PocketCorridor(),
+        var (tasks, _, events) = await RunDeadlock(TestMaps.PocketCorridor(), 500,
             ("R-001", new(2, 0), Heading.East, new(5, 0)),
             ("R-002", new(3, 0), Heading.West, new(0, 0)));
 
-        await fleet.RunAsync(maxTicks: 500);
-
-        // TODO(core): 양쪽 Completed, DeadlockDetected(yield, searchedDistance, resolvedMs>0) 1회, PathReplanned(deadlock)
-        fleet.Units.Should().NotBeNull();
+        tasks.Should().OnlyContain(t => t.Status == TaskStatus.Completed);
+        var deadlocks = Deadlocks(events);
+        deadlocks.Should().ContainSingle();
+        deadlocks[0].Resolution.Should().Be("yield");
+        deadlocks[0].SearchedDistance.Should().BeGreaterThan(0);
+        deadlocks[0].ResolvedMs.Should().BeGreaterThan(0);
+        events.Count(e => e.EventType == EventType.PathReplanned
+                          && StoreMapping.Read<PathReplannedPayload>(e.Payload).Reason == "deadlock").Should().BeGreaterThan(0);
     }
 
-    [Fact(Skip = PendingCore)]
+    [Fact]
     public async Task DL08_HeadOn_DeadEndCorridor_ResolutionFails()
     {
         // 회피 지점이 없는 1칸 통로
-        var fleet = Create(TestMaps.DeadEndCorridor(),
+        var (tasks, robots, events) = await RunDeadlock(TestMaps.DeadEndCorridor(), 500,
             ("R-001", new(1, 0), Heading.East, new(3, 0)),
             ("R-002", new(2, 0), Heading.West, new(0, 0)));
 
-        await fleet.RunAsync(maxTicks: 500);
-
-        // TODO(core): 순환 전원 TaskFailed(deadlock_unresolved)·Waiting→Error, DeadlockDetected(failed, searched=상한, resolvedMs=0) 1회
-        fleet.Units.Should().NotBeNull();
+        tasks.Should().OnlyContain(t => t.Status == TaskStatus.Failed);
+        robots.Should().OnlyContain(r => r.Status == RobotStatus.Error);
+        var deadlocks = Deadlocks(events);
+        deadlocks.Should().ContainSingle();
+        deadlocks[0].Resolution.Should().Be("failed");
+        deadlocks[0].ResolvedMs.Should().Be(0);
+        deadlocks[0].SearchedDistance.Should().Be(new DeadlockOptions().YieldSearchMaxDistance + 2);
+        events.Count(e => e.EventType == EventType.TaskFailed
+                          && StoreMapping.Read<TaskFailedPayload>(e.Payload).Reason == "deadlock_unresolved").Should().Be(2);
     }
 
-    [Fact(Skip = PendingCore)]
+    [Fact]
     public async Task DL09_ThreeVersusOne_NoPingPongOrStarvation()
     {
-        // 동쪽 3대 행렬 대 서쪽 1대. 포켓 (2,1)·(5,1)
-        var fleet = Create(TestMaps.TwoPocketCorridor(),
+        // 동쪽 3대 행렬 대 서쪽 1대. 포켓 (2,1)·(5,1). 1칸 통로라 전원 완료는 불가(완료 로봇이 통로를 막는다) —
+        // 핵심은 핑퐁·기아 없음: 해소가 일어나고, 같은 로봇이 무한 양보하지 않으며, 재탐지가 폭주하지 않는다
+        var (_, _, events) = await RunDeadlock(TestMaps.TwoPocketCorridor(), 400,
             ("R-001", new(3, 0), Heading.East, new(5, 0)),
             ("R-002", new(2, 0), Heading.East, new(6, 0)),
             ("R-003", new(1, 0), Heading.East, new(7, 0)),
             ("R-004", new(4, 0), Heading.West, new(0, 0)));
 
-        await fleet.RunAsync(maxTicks: 2000);
+        var deadlocks = Deadlocks(events);
+        deadlocks.Should().NotBeEmpty("해소가 일어나야 한다");
+        deadlocks.Where(d => d.Resolution == "yield")
+            .GroupBy(d => d.YieldRobotId).Should().OnlyContain(g => g.Count() <= 3, "같은 로봇이 무한 양보하지 않는다");
+        deadlocks.Count.Should().BeLessThan(12, "재탐지 폭주가 없다");
+    }
 
-        // TODO(core): 유한 틱 내 전원 종료(Completed 또는 상한 초과 실패), 같은 로봇의 무한 양보 없음
-        fleet.Units.Should().NotBeNull();
+    [Fact]
+    public async Task DL10_Blocked_WithAlternative_Reroutes_NotDeadlock()
+    {
+        // 2행 맵에서 R-002가 (1,0)에 머물러 R-001의 직선 길을 막는다. 대안(아래 행)이 있어 재계획으로 우회한다
+        var (tasks, _, events) = await RunDeadlock(TestMaps.Open(3, 2), 200,
+            ("R-001", new(0, 0), Heading.East, new(2, 0)),
+            ("R-002", new(1, 0), Heading.East, new(1, 0)));   // 제자리 작업 → (1,0) 점유
+
+        tasks[0].Status.Should().Be(TaskStatus.Completed, "대안으로 우회해 도착한다");
+        events.Count(e => e.EventType == EventType.PathReplanned
+                          && StoreMapping.Read<PathReplannedPayload>(e.Payload).Reason == "blocked").Should().BeGreaterThan(0);
+        events.Should().NotContain(e => e.EventType == EventType.DeadlockDetected, "대안이 있으면 교착이 아니다");
+    }
+
+    [Fact]
+    public void OnDeadlock_IgnoresReusedInfo_NoDuplicateEmit()   // DL-11 IsNew
+    {
+        var map = TestMaps.DeadEndCorridor();
+        var collector = new EventCollector(map.MapId, "r", 100, TimeProvider.System);
+        var lifecycle = new TaskLifecycle(map, new AStarPathPlanner(), new FleetOptions(), collector);
+        collector.Begin(1, DateTimeOffset.UnixEpoch);
+
+        var reused = new DeadlockInfo(new[] { "R-001", "R-002" }, new[] { new Point(1, 0), new Point(2, 0) },
+            "failed", null, null, 7, 1, 0, DeadlockPhase.Failed, IsNew: false);
+        lifecycle.OnDeadlock(reused, 5).Should().BeEmpty();
+
+        collector.Complete(Array.Empty<RobotTelemetryPayload>())
+            .SelectMany(b => b.Events).Should().NotContain(e => e.EventType == EventType.DeadlockDetected);
     }
 
     [Fact]
