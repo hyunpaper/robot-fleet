@@ -10,9 +10,9 @@
 
 ### 교착 대응 자동화
 
-교착이 발생하면 AI 에이전트가 당시의 대기 그래프, 로봇 궤적, 맵 구조를 근거로 원인을 진단하고
-경로 정책이나 레이아웃 수정안을 코드 변경으로 제시한다.
-관리자는 진단 보고서와 변경 내역을 검토해 승인만 하면 되고, 이후 검증과 배포는 파이프라인이 이어서 처리한다.
+교착이 발생하면 분석 에이전트가 당시의 대기 그래프, 로봇 궤적, 맵 구조를 근거로 원인을 가려내고
+경로 정책의 파라미터 수정안을 근거와 함께 제시한다.
+수정안은 허용된 파라미터 안에서만 고르므로 파이프라인이 기계적으로 검증하고, 관리자는 근거를 읽고 승인만 하면 된다.
 같은 유형의 교착이 반복될수록 대응 시간은 짧아지고, 판단의 근거는 모두 기록으로 남는다.
 
 <a href="https://raw.githubusercontent.com/hyunpaper/robot-fleet/main/docs/images/fleet-loop-3d.gif"><img src="docs/images/fleet-loop-3d.gif" alt="3D 시뮬레이션"></a>
@@ -36,11 +36,11 @@
 | M2 | 다중 로봇, 충돌 회피, 교착 탐지·해소 | 충돌 회피 완료, 교착 해소 남음 |
 | M3 | Ingest API + RabbitMQ + Worker로 이벤트 파이프라인 분리 | 구현 완료, 실서버 검증 남음 |
 | M4 | 락·상태·멱등 키를 Redis로 이전, 관제 서버 2대(재전송 멱등, 장애 조치 감지) | |
-| M5 | k3s 배포, nginx ingress, Redis Sentinel·RabbitMQ 3노드, 스케일 아웃 | |
-| M6 | Prometheus + Grafana, 실시간 관제 화면 | |
-| M7 | 실험: 로봇 수별 처리량, 회피 전략·우선순위 정책 비교 | |
-| M8 | 장애 주입: pod 강제 종료, Redis·브로커 장애 조치, 노드 drain, 네트워크 지연 | |
-| M9 | 교착 분석 에이전트: 원인 진단, 수정안 생성, 승인 후 자동 배포 | |
+| M5 | k3s 노드 3대 배포, nginx ingress, Redis Sentinel·RabbitMQ 3노드, 스케일 아웃 | |
+| M6 | Prometheus + Grafana, 실시간 관제 화면, run 재생 데이터 내보내기·정적 재생기 | |
+| M7 | 실험(AWS): 로봇 수별 처리량, 회피 전략·우선순위 정책 비교 | |
+| M8 | 장애 주입: pod 강제 종료, Redis·브로커 장애 조치, 노드 drain·강제 소실, 네트워크 지연 | |
+| M9 | 교착 분석 에이전트: 원인 진단, 정책 파라미터 수정안 생성, 승인 후 자동 배포 | |
 
 ### 남은 작업
 
@@ -49,11 +49,11 @@
 | M2 | 대기 그래프 순환 탐지, 회피 지점 양보, 1칸 통로 정면 대치 해소 |
 | M3 | 실서버 통합 테스트 41건 실행, 워커 kill·Ingest 재시작 포함 30분 E2E로 유실 0·중복 0 확인 |
 | M4 | Redis 이동 판정기(해시 체인 워터마크, 커밋·재주장 Lua), 관제 서버 2대 재전송 멱등, 장애 조치 감지 |
-| M5 | cp-1 + worker 3 k3s 구성, Redis Sentinel·RabbitMQ 3노드 배포, quorum 멤버 확장 |
-| M6 | Prometheus 수집, Grafana 대시보드, 실시간 관제 화면(QueryApi·WebSocket) |
-| M7 | 로봇 수별 처리량, 회피 전략·우선순위 정책·통로 폭·혼잡 가중치 비교 실험 |
-| M8 | Redis primary·RabbitMQ leader·관제 서버·노드 장애 주입, 겹침 0·유실 0·정지 시간 측정 |
-| M9 | 교착 이력 기반 원인 진단, 수정안 생성, 승인 후 배포 파이프라인 |
+| M5 | 노드 3대 k3s 구성, Redis Sentinel·RabbitMQ 3노드 배포, quorum 멤버 확장 |
+| M6 | Prometheus 수집, Grafana 대시보드, 실시간 관제 화면(QueryApi·WebSocket), run 재생 데이터 내보내기와 정적 재생기 |
+| M7 | run 전환 기능 뒤 AWS에서 로봇 수별 처리량, 회피 전략·우선순위 정책·통로 폭·혼잡 가중치 비교 실험 |
+| M8 | Redis primary·RabbitMQ leader·관제 서버·노드 장애 주입(drain·강제 소실·node-1 API 서버), 겹침 0·유실 0·정지 시간 측정 |
+| M9 | 교착 이력 기반 원인 분류(규칙), 로컬 LLM의 정책 파라미터 수정안 생성, 자동 검증 후 승인·배포 파이프라인 |
 
 ---
 
@@ -137,15 +137,14 @@ Simulator ──(틱마다 배치 이동 요청)──► FleetController ◄─
 
 ## 배포 환경 (예정)
 
-자체 서버에 k3s control plane 1대 + worker 3대로 구성한다. 아래 주소는 예시다.
+로컬 VM 3대에 k3s를 올린다. M7 부하 실험만 AWS에서 한다. 아래 주소는 예시다.
 
 <a href="https://raw.githubusercontent.com/hyunpaper/robot-fleet/main/docs/images/deployment-ha.svg"><img src="docs/images/deployment-ha.svg" alt="배포 구성"></a>
 
 | 노드 | 주소 | 역할 |
 |---|---|---|
-| cp-1 | 192.168.10.10 | control plane (워크로드 없음), 2 vCPU·2GB |
-| worker-1 | 192.168.10.11 | 애플리케이션, PostgreSQL, Redis·RabbitMQ 멤버, 6GB |
-| worker-2 | 192.168.10.12 | 애플리케이션, Redis·RabbitMQ 멤버, 6GB |
-| worker-3 | 192.168.10.13 | 애플리케이션, 모니터링, Redis·RabbitMQ 멤버, 6GB |
+| node-1 | 192.168.10.11 | k3s server, 애플리케이션, PostgreSQL, Redis·Sentinel·RabbitMQ 멤버 |
+| node-2 | 192.168.10.12 | 애플리케이션, Redis·Sentinel·RabbitMQ 멤버 |
+| node-3 | 192.168.10.13 | 애플리케이션, 모니터링, Redis·Sentinel·RabbitMQ 멤버 |
 
-Redis(primary 1 + replica 2 + Sentinel 3)와 RabbitMQ(3노드, quorum queue)는 worker 3대에 분산된다. 자세한 내용은 07, 08 문서 참고.
+노드는 2 vCPU·8GiB씩이다. Redis(primary 1 + replica 2 + Sentinel 3)와 RabbitMQ(3노드, quorum queue)는 세 노드에 분산된다. 자세한 내용은 07, 08 문서 참고.
