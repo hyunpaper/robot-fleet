@@ -23,17 +23,17 @@
 <text x="64" y="190" font-size="14" fill="#1f2937" font-weight="bold" text-anchor="start">node-1</text>
 <text x="120" y="190" font-size="12.5" fill="#1f2937" font-weight="normal" text-anchor="start">192.168.10.11</text>
 <text x="64" y="208" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">k3s server 겸임 · taint 없음 · fleet/pg=true</text>
-<text x="64" y="222" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">2 vCPU · 8GiB</text>
+<text x="64" y="222" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">기본 2 vCPU · 4GiB / 실험 4 vCPU · 8GiB</text>
 <rect x="510" y="170" width="420" height="924" rx="10" fill="#eceff3" stroke="#b9c0ca" stroke-width="1.2"/>
 <text x="524" y="190" font-size="14" fill="#1f2937" font-weight="bold" text-anchor="start">node-2</text>
 <text x="580" y="190" font-size="12.5" fill="#1f2937" font-weight="normal" text-anchor="start">192.168.10.12</text>
 <text x="524" y="208" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">k3s agent</text>
-<text x="524" y="222" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">2 vCPU · 8GiB</text>
+<text x="524" y="222" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">기본 2 vCPU · 4GiB / 실험 4 vCPU · 8GiB</text>
 <rect x="970" y="170" width="420" height="924" rx="10" fill="#eceff3" stroke="#b9c0ca" stroke-width="1.2"/>
 <text x="984" y="190" font-size="14" fill="#1f2937" font-weight="bold" text-anchor="start">node-3</text>
 <text x="1040" y="190" font-size="12.5" fill="#1f2937" font-weight="normal" text-anchor="start">192.168.10.13</text>
-<text x="984" y="208" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">k3s agent · 모니터링 상시</text>
-<text x="984" y="222" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">2 vCPU · 8GiB</text>
+<text x="984" y="208" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">k3s agent · 모니터링(실험 시)</text>
+<text x="984" y="222" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">기본 2 vCPU · 4GiB / 실험 4 vCPU · 8GiB</text>
 <rect x="835.4" y="178" width="84.6" height="17" rx="8" fill="#6b7280" stroke="none" stroke-width="1" opacity="0.9"/>
 <text x="877.7" y="190" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">drain 시연 대상</text>
 <rect x="1295.4" y="178" width="84.6" height="17" rx="8" fill="#6b7280" stroke="none" stroke-width="1" opacity="0.9"/>
@@ -217,13 +217,13 @@
 <text x="1006" y="936" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">task/conflict quorum 32 · telemetry classic 16</text>
 <text x="1006" y="950" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">local PV /data/rabbitmq</text>
 <rect x="980" y="980" width="400" height="104" rx="8" fill="#e9f6ec" stroke="#8ccb9c" stroke-width="1"/>
-<text x="992" y="997" font-size="11.5" fill="#237a3b" font-weight="bold" text-anchor="start">monitoring</text>
+<text x="992" y="997" font-size="11.5" fill="#237a3b" font-weight="bold" text-anchor="start">monitoring (실험 시)</text>
 <rect x="990" y="1006" width="190" height="54" rx="8" fill="#ffffff" stroke="#237a3b" stroke-width="1.2"/>
 <rect x="990" y="1006" width="5" height="54" rx="2" fill="#237a3b" stroke="none" stroke-width="1"/>
 <text x="1006" y="1025" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">Prometheus</text>
 <rect x="1144.8" y="1013" width="25.2" height="17" rx="8" fill="#237a3b" stroke="none" stroke-width="1" opacity="0.9"/>
 <text x="1157.4" y="1025" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">×1</text>
-<text x="1006" y="1042" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">보존 7일 · 300m / 512Mi</text>
+<text x="1006" y="1042" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">보존 2일 · 300m / 512Mi</text>
 <rect x="1190" y="1006" width="180" height="54" rx="8" fill="#ffffff" stroke="#237a3b" stroke-width="1.2"/>
 <rect x="1190" y="1006" width="5" height="54" rx="2" fill="#237a3b" stroke="none" stroke-width="1"/>
 <text x="1206" y="1025" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">Grafana</text>

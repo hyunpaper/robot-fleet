@@ -186,6 +186,6 @@ Redis · RabbitMQ 멤버는 세 노드 전부에 있고, 노드별 차이는 k3s
 | 사용자 확정 | worker 메모리 6GiB × 3, cp-1 2 vCPU · 2GB | 08 §11 리소스 표의 기준 |
 | 사용자 확인 필요 | worker CPU 4 vCPU | 08의 가정. request 합 최대 6.15 core가 worker 1대 장애 후 8 vCPU 안에 든다는 계산의 전제 |
 | 사용자 확정 (갱신) | 노드 구성 cp-1 + worker-1~3 → **node-1~3 (3대)** | 전용 control plane 제거. 과반 구성 동일, node-1이 server 겸임 (위 "노드 구성", 02) |
-| 사용자 확정 (갱신) | worker 6GiB × 3 + cp-1 2GB → **2 vCPU · 8GiB × 3** | 로컬 호스트 64GB. 모니터링 상시 유지. 08 §11 리소스 표가 기준 |
+| 사용자 확정 (갱신) | worker 6GiB × 3 + cp-1 2GB → **기본 4GiB (2 vCPU) / 실험 8GiB (4 vCPU)** × 3 | 로컬 호스트 64GB. 모니터링은 실험 시. 08 §11 리소스 표가 기준 |
 | 사용자 확정 (갱신) | 자체 리눅스 서버 → **집 PC VMware VM 3대** (M7 부하 실험만 AWS) | 매니지드 데이터 서비스는 계속 쓰지 않는다. 02 환경 절 |
 | 총괄 결정 | Simulator는 node-1을 피한다 | k3s server · PostgreSQL과 같은 노드에 두면 node-1 장애가 "틱 정지 + 재배치 불가"가 된다. node-2 · 3에 두면 node-1 장애에도 틱이 이어지고, node-2 · 3 장애는 재시작(새 epoch)으로 끝난다. 08 §10 · §11 배치 · 수치 갱신 |
