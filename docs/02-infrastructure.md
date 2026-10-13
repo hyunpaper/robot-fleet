@@ -12,7 +12,7 @@
 
 | 단계 | 어디서 | Redis | Sentinel | RabbitMQ | 비용 |
 |---|---|---|---|---|---|
-| **M3 · M4** | **k3s 불필요** — 사용자가 제공한 단일 인프라 서버(RabbitMQ · Redis · PostgreSQL). 접속 정보는 appsettings(10 §9) | 1 | 없음 | 1 (quorum 타입, 멤버 1) | 0원 |
+| **M3 · M4** | **k3s 불필요** — 사용자가 제공한 단일 인프라 서버(RabbitMQ · Redis · PostgreSQL). 접속 정보는 `appsettings.Local.json`(커밋 금지) 또는 환경 변수 | 1 | 없음 | 1 (quorum 타입, 멤버 1) | 0원 |
 | **M5 · M6 · M8 · M9** | 집 PC — **VMware VM 3대 k3s** | 3 | 3 | 3 (멤버 3으로 `grow`) | 전기료 |
 | **M6 추가** | 실시간 관제 화면 **+ run 재생 데이터 내보내기 · 정적 재생기**(아래 "외부 공개") | | | | 0원 |
 | **M7 부하 실험** | **AWS** (아래 "M7 — AWS"). **run 전환 기능(`POST /admin/run`)이 선결**(아래 "run 관리") | 3 | 3 | 3 | 회당 $1~2 |
@@ -143,7 +143,7 @@ kubectl label node node-1 fleet/pg=true
 
 | 구성 | 조건 | 비고 |
 |---|---|---|
-| 단일 노드 | 서버 1대 | **M3 · M4는 k3s 자체가 불필요** — 사용자가 제공한 단일 인프라 서버(RabbitMQ · Redis · PostgreSQL), 접속 정보는 appsettings(10 §9). **k3s는 M5부터** |
+| 단일 노드 | 서버 1대 | **M3 · M4는 k3s 자체가 불필요** — 사용자가 제공한 단일 인프라 서버(RabbitMQ · Redis · PostgreSQL), 접속 정보는 `appsettings.Local.json`(커밋 금지) 또는 환경 변수. **k3s는 M5부터** |
 | **노드 3** | 3대(동일 사양) | **권장(M5~)** — Redis Sentinel · RabbitMQ quorum의 과반 합의에 서로 다른 노드의 투표자 3이 필요하다. 2대면 1개 손실 시 과반을 못 채운다 |
 
 | 노드 | k3s | 레이블 | 고정 IP | vCPU | RAM | 디스크 |
@@ -311,6 +311,7 @@ spec:
 ```
 
 맵을 여러 개 돌리려면 맵마다 별도 Deployment를 둔다.
+**required nodeAffinity `kubernetes.io/hostname NotIn node-1`** — node-1(API 서버) 장애에도 틱이 유지되게 node-2 · 3 중 어디든 둔다(08 §10).
 
 ---
 
@@ -523,7 +524,7 @@ HPA의 `stabilizationWindowSeconds`는 scaleDown 300초로 둔다. 재배정마�
 | RabbitMQ leader 노드 kill | `rabbitmq-queues`로 리더 최다 노드 확인 → `kubectl delete pod rabbitmq-N --force` | quorum 리더 재선출, Ingest 503 → Simulator 순차 재전송, telemetry 파티션 일부 공백 | task · conflict 유실 수, 중복 수, telemetry 유실 수, Ingest 503 수, 리더 재선출 시간 | task · conflict 유실 0, 중복 0, 틱 정지 0 |
 | FleetController 1대 kill (배치 처리 중) | `FLEET_FAULT_KILL_AT=after-read · after-commit · before-response` 각 100회 + 무작위 `kubectl delete pod --force` 30분 | 재전송이 다른 인스턴스로 가고, 적용된 판정 = Redis 기록 (08 §4 표) | 틱 정지 시간, 재시도 수, 기록 반환 수, 다이제스트 불일치 수 | 불일치 0, `state_lost` 0, 틱 정지 ≤ 1초 |
 | 노드 drain | `kubectl drain node-2 --ignore-daemonsets --delete-emptydir-data` → 10분 후 `uncordon` (대상은 **node-2 또는 node-3** — node-1은 API 서버) | PDB 준수, 그 노드의 Redis · Sentinel · RabbitMQ 멤버 이탈(primary · 리더였으면 장애 조치), 데이터 pod Pending → uncordon 후 재합류 | 틱 정지 시간, task · conflict 유실 수, telemetry 유실 수, 재합류 후 복제 완료 시간 | 틱 정지 ≤ 30초, task · conflict 유실 0 |
-| **node-1(API 서버) 장애** | node-1 VM 정지 | 다른 노드의 pod 계속 동작 · 스케줄링 · 재배치 정지 · `kubectl` 불가, 과반 2/3 유지 | 틱 정지 시간, 겹침 수 | 겹침 0 (틱 정지 시간은 기록) |
+| **node-1(API 서버) 장애** | node-1 VM 정지 | 다른 노드의 pod 계속 동작 · **Simulator · FleetController 틱 유지** · 스케줄링 · 재배치 정지 · `kubectl` 불가, 과반 2/3 유지 | 틱 정지 시간, 겹침 수 | 겹침 0, 틱 정지 ≤ 30초(node-1에 Redis primary가 있었을 때만 정지) |
 | **노드 강제 소실** | VM 전원 강제 차단(예고 없는 노드 소실). **스냅샷을 떠 두면 같은 상태에서 반복** | 과반 유지 여부, 데이터 pod Pending | 겹침 수, 틱 정지 시간 | 겹침 0 (틱 정지 시간은 기록) |
 
 > 로컬 VM이라 **소실 시점을 통제할 수 있다.** 클라우드의 인스턴스 회수는 시점을 못 고르는 관측 항목이지만,

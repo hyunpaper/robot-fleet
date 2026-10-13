@@ -578,8 +578,8 @@ telemetry만 있는 배치는 항상 `done`이다.
 
 | 노드 | 데이터 계층 | 애플리케이션 |
 |---|---|---|
-| node-1 | Redis · Sentinel · RabbitMQ | PostgreSQL · Simulator · nginx ingress |
-| node-2 | Redis · Sentinel · RabbitMQ | FleetController · IngestApi · EventWorker · QueryApi |
+| node-1 | Redis · Sentinel · RabbitMQ | PostgreSQL · nginx ingress · EventWorker(증설분) |
+| node-2 | Redis · Sentinel · RabbitMQ | **Simulator** · FleetController · IngestApi · EventWorker · QueryApi |
 | node-3 | Redis · Sentinel · RabbitMQ | FleetController · IngestApi · EventWorker · Prometheus · Grafana |
 
 | 워크로드 | 종류 · 수 | anti-affinity | PDB | 비고 |
@@ -589,6 +589,7 @@ telemetry만 있는 배치는 항상 `done`이다.
 | RabbitMQ | StatefulSet 3, `podManagementPolicy: Parallel` | **required** | maxUnavailable 1 | peer discovery k8s 플러그인 |
 | FleetController | Deployment 2 | **preferred** (weight 100) | minAvailable 1 | headless Service 추가(C6) |
 | PostgreSQL | StatefulSet 1 | — | — | `nodeSelector: fleet/pg=true` (node-1). 07 범위 밖 |
+| Simulator | Deployment 1 (Recreate) | — | — | **required nodeAffinity `kubernetes.io/hostname NotIn node-1`** — node-2 · 3 중 어디든(특정 노드 고정 안 함). 위 배치 표의 node-2는 정상 시 위치 |
 | CoreDNS | 2 | preferred | — | k3s 기본 1. 노드 하나가 죽어도 DNS가 남게 |
 
 | 결정 | 근거 |
@@ -596,6 +597,7 @@ telemetry만 있는 배치는 항상 `done`이다.
 | 데이터 계층은 required — 노드당 1개 | 같은 노드에 둘이 뜨면 그 노드 장애에 과반이 깨진다. 차라리 Pending이 낫다 |
 | FleetController는 preferred | 노드 2개가 내려간 상태에서도 1대는 떠야 한다. 2대가 한 노드에 몰리는 건 일시적 |
 | 노드가 빠지면 그 노드의 데이터 pod는 **Pending** | local PV가 노드에 묶여 있고 다른 노드엔 이미 같은 종류가 있다. 의도된 동작. 남은 2개로 과반 유지 |
+| Simulator는 node-1을 피한다 | node-1은 API 서버를 겸해 장애 시 재배치가 정지한다. Simulator가 node-1에 있으면 node-1 장애 = 틱 정지 + 복귀까지 재기동 불가가 된다. node-2 · 3에 두면 node-1 장애에도 틱이 유지된다. 특정 노드에 고정하지 않아 node-2 · 3 장애 시에는 다른 쪽으로 재배치(새 `epoch`) |
 | RabbitMQ 멤버 3 유지 | 노드 3대가 이미 확보된 이상 추가 부담은 1Gi뿐이다. 잃는 것(M8 leader kill 시나리오, "task · conflict 유실 0을 Raft로 증명")이 더 크다 |
 
 Redis 역할 결정(init):
@@ -610,8 +612,8 @@ Redis 역할 결정(init):
 
 | 다운 노드 | Redis | Sentinel (quorum 2) | RabbitMQ quorum | FleetController | 그 밖 |
 |---|---|---|---|---|---|
-| node-1 | 2/3 · primary였으면 장애 조치 | 2/3 · 합의 · 선출 가능 | 2/3 · 리더 재선출 | 2/2 | **API 서버 동반 정지** — 다른 노드의 pod는 유지, 스케줄링 · 재배치 · endpoint 갱신 정지, `kubectl` 불가. node-1의 Simulator · PostgreSQL 정지 — 이벤트는 quorum queue에 적체 후 복구 시 소비, Simulator는 node-1 복귀 후 재시작 = 새 `epoch` (07 범위 밖) |
-| node-2 | 2/3 | 2/3 | 2/3 | 1/2 이상 | |
+| node-1 | 2/3 · primary였으면 장애 조치 | 2/3 · 합의 · 선출 가능 | 2/3 · 리더 재선출 | 2/2 | **API 서버 동반 정지** — 다른 노드의 pod는 유지, 스케줄링 · 재배치 · endpoint 갱신 정지, `kubectl` 불가. PostgreSQL 정지(이벤트는 quorum queue에 적체 후 복구 시 소비). **Simulator는 node-2 · 3에 있어 틱 유지** — Redis primary가 node-1에 있었으면 장애 조치 동안만 정지 |
+| node-2 | 2/3 | 2/3 | 2/3 | 1/2 이상 | Simulator가 있었다면 node-3으로 재배치 · 재시작 = 새 `epoch` (07 범위 밖) |
 | node-3 | 2/3 | 2/3 | 2/3 | 1/2 이상 | 모니터링 정지(Prometheus Pending → 측정 중이면 지표에 공백) |
 
 그 사이 추가 1대 장애는 **버티지 못한다**(과반 붕괴, 07 설계상 한계).
@@ -681,8 +683,8 @@ limit = request × 2.
 
 | 노드 | request | ≤ 7.4Gi | 여유 |
 |---|---|---|---|
-| node-1 | 2.16Gi | ✓ | 5.24Gi |
-| node-2 | 1.72Gi | ✓ | 5.68Gi |
+| node-1 | 1.66Gi | ✓ | 5.74Gi |
+| node-2 | 2.22Gi | ✓ | 5.18Gi |
 | node-3 | 2.28Gi | ✓ | 5.12Gi |
 | **합계** | **6.16Gi** | | |
 
@@ -693,17 +695,17 @@ limit = request × 2.
 
 | 장애 | 재배치할 pod | 재배치 request | 남은 2대 request 합 | ≤ 14.8Gi | 노드당 | Pending | 비고 |
 |---|---|---|---|---|---|---|---|
-| node-1 | Simulator · nginx · EventWorker | 0.88Gi | 4.88Gi | ✓ | **2.44Gi** | 데이터 멤버 3, **PostgreSQL** | **API 서버 동반 정지** — 이 재배치는 node-1 복귀까지 일어나지 않는다(아래) |
-| node-2 | FleetController · IngestApi · QueryApi · EventWorker | 0.94Gi | 5.38Gi | ✓ | **2.69Gi** | 데이터 멤버 3 | |
-| node-3 | FleetController · IngestApi · EventWorker · Grafana | 1.00Gi | 4.61Gi | ✓ | **2.31Gi** | 데이터 멤버 3, **Prometheus** | |
+| node-1 | nginx · EventWorker | 0.38Gi | 4.88Gi | ✓ | **2.44Gi** | 데이터 멤버 3, **PostgreSQL** | **API 서버 동반 정지** — 이 재배치는 node-1 복귀까지 일어나지 않는다(아래). Simulator는 영향 없음 |
+| node-2 | Simulator · FleetController · IngestApi · QueryApi · EventWorker | 1.44Gi | 5.38Gi | ✓ | **2.69Gi** | 데이터 멤버 3 | Simulator는 node-3으로(nodeAffinity) |
+| node-3 | FleetController · IngestApi · EventWorker · Grafana | 1.00Gi | 4.88Gi | ✓ | **2.44Gi** | 데이터 멤버 3, **Prometheus** | |
 
-메모리는 노드당 2.3~2.7Gi로 **여유가 4.7Gi 이상**이다. 제약은 CPU다.
+메모리는 노드당 2.44~2.69Gi로 **여유가 4.7Gi 이상**이다. 제약은 CPU다.
 
 node-1은 k3s server를 겸하므로 **API 서버가 함께 내려간다.**
 
 | 항목 | 영향 |
 |---|---|
-| 이미 떠 있는 pod | kubelet이 계속 실행. Redis · RabbitMQ · 애플리케이션 동작 유지 |
+| 이미 떠 있는 pod | node-2 · 3의 kubelet이 계속 실행. Redis · RabbitMQ · Simulator · FleetController 동작 유지 → **틱 유지** |
 | 스케줄링 · 재배치 | **정지**. 위 표의 재배치가 node-1 복귀까지 일어나지 않는다 |
 | `kubectl` | 불가 |
 | 과반 | Redis · Sentinel · RabbitMQ 모두 2/3로 유지 |
@@ -738,7 +740,7 @@ FleetController 배치 처리 중 kill은 시점을 고정해야 재현된다. �
 | 시나리오 | 대상 · 방법 | 측정 |
 |---|---|---|
 | 노드 drain | **node-2 또는 node-3** (node-1은 API 서버라 drain 중 스케줄링을 잃는다) | 위 표 전 지표 |
-| **node-1(API 서버) 장애** | node-1 VM 정지 | 다른 노드의 pod 계속 동작 · 스케줄링 정지 확인, 틱 정지 시간 · 겹침 0 |
+| **node-1(API 서버) 장애** | node-1 VM 정지 | 다른 노드의 pod 계속 동작 · **Simulator · FleetController 틱 유지** · 스케줄링 정지 확인, 틱 정지 시간 · 겹침 0. 합격: 겹침 0, 틱 정지 ≤ 30초(node-1에 Redis primary가 있었을 때만 정지) |
 | **노드 강제 소실** | VM 전원 강제 차단(예고 없는 노드 소실). VM 스냅샷을 떠 두고 같은 상태에서 반복 | 겹침 수 · 틱 정지 시간 · 과반 유지 여부 |
 
 합격 기준은 모든 행 공통으로 **겹침 0**, Redis · drain 계열은 **틱 정지 ≤ 30초**를 유지한다.
@@ -753,8 +755,8 @@ FleetController 배치 처리 중 kill은 시점을 고정해야 재현된다. �
 | # | 요소 | 내용 |
 |---|---|---|
 | 1 | 노드 띠 | **3개**: node-1 · node-2 · node-3 (192.168.10.11~13), 같은 폭 |
-| 2 | node-1 부제 | `k3s server 겸임 · taint 없음 · fleet/pg=true` — PostgreSQL · Simulator · nginx + 데이터 멤버 |
-| 3 | node-2 부제 | `k3s agent` — FleetController · IngestApi · EventWorker · QueryApi + 데이터 멤버 |
+| 2 | node-1 부제 | `k3s server 겸임 · taint 없음 · fleet/pg=true` — PostgreSQL · nginx + 데이터 멤버 (Simulator 없음) |
+| 3 | node-2 부제 | `k3s agent` — Simulator(`NotIn node-1`) · FleetController · IngestApi · EventWorker · QueryApi + 데이터 멤버 |
 | 4 | node-3 부제 | `k3s agent · 모니터링 상시` — FleetController · IngestApi · EventWorker · Prometheus · Grafana + 데이터 멤버 |
 | 5 | 상단 부제 | `k3s 노드 3대 · 네임스페이스 4개` |
 | 6 | FleetController 상자 | `×2 (상한) · 판정 /move-requests/batch · 경로 /paths/batch · 재전송 멱등 · 서로 다른 노드(preferred) · 200m / 256Mi` |
