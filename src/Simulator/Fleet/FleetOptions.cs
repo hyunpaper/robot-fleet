@@ -22,6 +22,15 @@ public sealed record FleetOptions
 
     public int TurnMsPer90 { get; init; } = 300;
 
+    /// 재계획 트리거: 대기 임계(ms). 04 설정값 6
+    public int ReplanWaitThresholdMs { get; init; } = 500;
+
+    /// 같은 로봇의 재계획 쿨다운(ms). 04 설정값 7
+    public int ReplanCooldownMs { get; init; } = 100;
+
+    /// 같은 작업의 재계획 상한(초과 시 작업 실패). 04 설정값 8
+    public int ReplanMaxPerTask { get; init; } = 5;
+
     public long MaxTicks { get; init; } = 100_000;
 
     /// 배치 봉투에 싣는 run 식별자(03). 비어 있으면 FleetSimulation이 RunIds.New로 만든다
