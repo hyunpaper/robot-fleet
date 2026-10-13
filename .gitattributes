@@ -2,3 +2,5 @@
 *.sln text eol=crlf
 *.gif binary
 *.png binary
+# 맵 해시는 파일 바이트 sha256(03). 줄바꿈이 바뀌면 해시가 바뀌므로 LF로 못박는다
+maps/*.json text eol=lf
