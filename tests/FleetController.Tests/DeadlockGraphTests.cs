@@ -68,14 +68,14 @@ public sealed class DeadlockGraphTests
     }
 
     [Fact]
-    public void 임계_미만_대기는_제외()
+    public void 모든_로봇이_임계_이상일_때만_순환()
     {
         var edges = new Dictionary<string, string>(StringComparer.Ordinal) { ["R-002"] = "R-001", ["R-001"] = "R-002" };
-        var wait = new Dictionary<string, int>(StringComparer.Ordinal) { ["R-001"] = 500, ["R-002"] = 900 };
+        var wait = new Dictionary<string, int>(StringComparer.Ordinal) { ["R-001"] = 1000, ["R-002"] = 900 };
 
-        DeadlockGraph.FindCycles(edges, wait, 1000).Should().BeEmpty();
+        DeadlockGraph.FindCycles(edges, wait, 1000).Should().BeEmpty();   // 한 대라도 미만이면 과도기
 
-        wait["R-001"] = 1000;   // 한 대만 임계 넘어도 순환
+        wait["R-002"] = 1000;   // 둘 다 임계 이상 → 진짜 교착
         DeadlockGraph.FindCycles(edges, wait, 1000).Should().ContainSingle();
     }
 

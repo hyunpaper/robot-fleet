@@ -513,7 +513,7 @@ M9 1단계가 이 두 값으로 `no_yield_point`를 판정한다(04 "M9 교착 �
 |---|---|---|---|---|---|---|---|
 | **Idle** | — | `task_assigned` | ✗ | ✗ | ✗ | `charge_at_station` | `fault` |
 | **Moving** | `arrived_park` `arrived_charge_denied` | — | `conflict_wait` | `arrived_origin` | `arrived_destination` | `arrived_charger` | `no_path` `replan_exceeded` `fault` |
-| **Waiting** | ✗ | `path_cleared` `replanned` `yield` | — | ✗ | ✗ | ✗ | `deadlock_unresolved` `fault` |
+| **Waiting** | ✗ | `path_cleared` `replanned` `yield` | — | ✗ | ✗ | ✗ | `deadlock_unresolved` `replan_exceeded` `fault` |
 | **Loading** | ✗ | `load_done` | ✗ | — | ✗ | ✗ | `fault` |
 | **Unloading** | `unload_done` | ✗ | ✗ | ✗ | — | ✗ | `fault` |
 | **Charging** | `charge_done` | ✗ | ✗ | ✗ | ✗ | — | `fault` |

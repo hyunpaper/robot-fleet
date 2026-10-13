@@ -11,4 +11,7 @@ public interface IRobotObserver
 
     /// 이동 거부. target = 들어가려던 칸
     void OnDenied(Robot robot, MoveDecision decision, Point target, long tick);
+
+    /// 판정 응답에 실린 교착 해소(13 §2). 반환 = 이번 틱 결정을 건너뛸 로봇들(양보로 경로를 새로 받은 로봇·실패로 Error가 된 순환 로봇)
+    IReadOnlyCollection<string> OnDeadlock(DeadlockInfo info, long tick);
 }

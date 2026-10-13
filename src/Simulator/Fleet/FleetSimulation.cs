@@ -28,6 +28,7 @@ public sealed class FleetSimulation
     private readonly TaskDispatcher _dispatcher = new();
     private readonly TaskLifecycle _lifecycle;
     private readonly RobotStepper _stepper;
+    private readonly InMemoryMoveArbiter _arbiter;
     private readonly string _runId;
     private EventCollector? _events;
     private Action<EventBatch>? _onBatch;
@@ -56,7 +57,11 @@ public sealed class FleetSimulation
         var planner = new AStarPathPlanner();
         _lifecycle = new TaskLifecycle(map, planner, options, _events);
 
-        var arbiter = new InMemoryMoveArbiter();
+        var deadlockOptions = new DeadlockOptions();
+        deadlockOptions.Validate();
+        var arbiter = new InMemoryMoveArbiter(deadlockOptions, options.TickMs);
+        arbiter.RegisterMap(map);
+        _arbiter = arbiter;
         foreach (var (cell, i) in StartCells(map, options.Robots).Select((c, i) => (c, i)))
         {
             var robot = new Robot { RobotId = $"R-{i + 1:D3}", MapId = map.MapId, Position = cell, Heading = Heading.North };
@@ -131,6 +136,7 @@ public sealed class FleetSimulation
             // 열린 대기 구간을 닫아 마지막 배치로 보낸다(종료 시 ConflictDetected 유실 방지). SimulationEnded는 그 맨 뒤
             _events.Begin(_tick, _time.GetUtcNow());
             _lifecycle.FlushOpenConflicts(_tick);
+            _lifecycle.FlushDeadlocks(_arbiter.DrainPendingDeadlocks(_map.MapId, _tick));   // 종료 전 진행 중 교착 마무리(13 §2)
             _events.SimulationEnded(new SimulationEndedPayload(_tick, _generator.Created, _lifecycle.Completed, _lifecycle.Failed,
                 (int)_overruns, (long)_stall.TotalMilliseconds, exit == ExitCanceled ? "stopped" : "max_ticks"));
             foreach (var batch in _events.Complete([]).Where(b => b.Events.Count > 0))
@@ -166,6 +172,7 @@ public sealed class FleetSimulation
 
         await _stepper.StepAllAsync(_robots, _tick, ct);
         _lifecycle.AfterStep();
+        _lifecycle.ApplyReplans(_tick);
 
         if (_events is null) return true;
         foreach (var batch in _events.Complete(_robots.Select(_lifecycle.TelemetryOf)))

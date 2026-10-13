@@ -70,8 +70,47 @@ public sealed class RobotStepper
                 decisions[batch[k].Index] = result[k];
         }
 
+        // 교착 해소를 관찰자에 넘긴다(13 §2). 양보로 경로를 새로 받은 로봇·실패로 Error가 된 로봇은 이번 틱 결정을 건너뛴다
+        var skip = new HashSet<string>(StringComparer.Ordinal);
+        if (_observer is not null)
+            foreach (var decision in decisions)
+                if (decision?.Deadlock is { } info)
+                    foreach (var r in _observer.OnDeadlock(info, tick))
+                        skip.Add(r);
+
         for (var i = 0; i < robots.Count; i++)
-            await ApplyAsync(robots[i], tick, decisions[i], ct);
+            await ApplyAsync(robots[i], tick, skip.Contains(robots[i].RobotId) ? null : decisions[i], ct);
+    }
+
+    /// 교착 양보: 로봇에 명시 경로(회피 지점 경유)를 통째로 심는다. 상태는 Moving으로, 관찰자 통지는 호출자(생애주기)가 한다. 13 §5
+    public void SetPath(Robot robot, IReadOnlyList<PathStep> steps)
+    {
+        var state = StateOf(robot);
+        robot.PlannedPath = steps;
+        robot.PathIndex = 0;
+        state.Action = null;
+        state.WaitMs = 0;
+        robot.Status = RobotStatus.Moving;
+    }
+
+    public enum ReplanOutcome { Applied, NoAlternative, Failed }
+
+    /// 재계획(13 §6). 현재 위치에서 goal로 다시 계획해 남은 경로와 다르면 적용(대안), 같으면 NoAlternative(대기 유지), 경로 없으면 Failed.
+    /// 적용 시 WaitMs를 0으로(§6c). 상태 통지는 호출자가 한다
+    public (ReplanOutcome Outcome, int OldLength, int NewLength, double ComputeMs) Replan(Robot robot, Point goal)
+    {
+        var state = StateOf(robot);
+        var result = _planner.FindPath(_map, robot.Position, robot.Heading, goal);
+        if (!result.IsSuccess)
+            return (ReplanOutcome.Failed, 0, 0, result.Elapsed.TotalMilliseconds);
+
+        var remaining = robot.PlannedPath.Skip(robot.PathIndex).Select(s => s.Cell).ToList();
+        if (result.Steps.Select(s => s.Cell).SequenceEqual(remaining))
+            return (ReplanOutcome.NoAlternative, 0, 0, result.Elapsed.TotalMilliseconds);
+
+        var oldLength = Math.Max(0, remaining.Count - 1);
+        SetPath(robot, result.Steps);
+        return (ReplanOutcome.Applied, oldLength, result.MoveCount, result.Elapsed.TotalMilliseconds);
     }
 
     /// <summary>1단계(계획)와 2단계의 회전·도착 분기까지. 이동이 필요하면 요청을 돌려주고, 아니면 null.</summary>

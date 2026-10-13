@@ -134,6 +134,136 @@ internal sealed class TaskLifecycle : IRobotObserver
             decision.BlockedBy ?? robot.RobotId);
     }
 
+    /// 판정 응답의 교착 해소를 적용한다(13 §2 · §5). 반환 = 이번 틱 결정을 건너뛸 로봇들
+    public IReadOnlyCollection<string> OnDeadlock(DeadlockInfo info, long tick)
+    {
+        if (!info.IsNew) return Array.Empty<string>();   // 재사용·재전송은 중복 발행·실행하지 않는다
+        switch (info.Phase)
+        {
+            case DeadlockPhase.Detected:
+                var yielded = StartYield(info, tick);
+                return yielded is null ? Array.Empty<string>() : new[] { yielded };
+            case DeadlockPhase.Resolved:
+                EmitDeadlock(info);
+                if (_runs.TryGetValue(info.YieldRobotId!, out var yr)) yr.Yielding = false;
+                return Array.Empty<string>();
+            case DeadlockPhase.Failed:
+                EmitDeadlock(info);
+                return FailCycle(info, tick);
+            default:
+                return Array.Empty<string>();
+        }
+    }
+
+    // 양보: 회피 지점을 경유해 원래 목적지로 가는 경로를 통째로 심는다(13 §5). 회피 지점에서 멈추지 않고 waypoint로 지난다
+    private string? StartYield(DeadlockInfo info, long tick)
+    {
+        if (info.YieldRobotId is not { } robotId || info.YieldTo is not { } yieldTo) return null;
+        if (!_runs.TryGetValue(robotId, out var run) || run.Task is not { } task || Stepper is null) return null;
+
+        var robot = run.Robot;
+        var legGoal = run.Phase == FleetPhase.ToOrigin ? task.Origin : task.Destination;
+        var leg1 = _planner.FindPath(_map, robot.Position, robot.Heading, yieldTo);
+        if (!leg1.IsSuccess) return null;
+        var leg2 = _planner.FindPath(_map, yieldTo, leg1.Steps[^1].Heading, legGoal);
+        var combined = new List<PathStep>(leg1.Steps);
+        if (leg2.IsSuccess) combined.AddRange(leg2.Steps.Skip(1));
+
+        var oldLength = Math.Max(0, robot.PlannedPath.Count - 1 - robot.PathIndex);
+        Stepper.SetPath(robot, combined);
+        if (run.Reported == RobotStatus.Waiting)   // 대기 중이던 로봇만 상태 전이(Waiting→Moving yield). 이미 Moving이면 경로만 바꾼다
+        {
+            Report(run, RobotStatus.Moving, "yield");
+            CloseEpisode(run, tick);
+            run.WaitTicks = 0;
+        }
+
+        _events?.Replan(robotId, new PathReplannedPayload(robotId, task.TaskId, "deadlock", oldLength, combined.Count - 1,
+            leg1.Elapsed.TotalMilliseconds));
+        run.Yielding = true;
+        run.ReplanCount++;   // deadlock 재계획도 상한에 센다(§7)
+        return robotId;
+    }
+
+    // 회피 지점 없는 교착: 순환 전원 작업 실패 + Waiting → Error(13 §5)
+    private IReadOnlyCollection<string> FailCycle(DeadlockInfo info, long tick)
+    {
+        var failed = new List<string>();
+        foreach (var robotId in info.Cycle)
+        {
+            // 실제로 막혀 대기 중인 로봇만 실패시킨다(진짜 교착은 전원 Waiting). 양보 중·이동 중은 건드리지 않는다
+            if (!_runs.TryGetValue(robotId, out var run) || run.Task is not { } task) continue;
+            if (run.Yielding || run.Reported != RobotStatus.Waiting) continue;
+            Report(run, RobotStatus.Error, "deadlock_unresolved");
+            CloseEpisode(run, tick);
+            run.Robot.Status = RobotStatus.Error;
+            _events?.TaskEvent(robotId, EventType.TaskFailed,
+                new TaskFailedPayload(task.TaskId, robotId, "deadlock_unresolved", run.Robot.Position.X, run.Robot.Position.Y));
+            task.Status = TaskStatus.Failed;
+            run.Robot.CurrentTaskId = null;
+            run.Task = null;
+            run.Phase = FleetPhase.Error;
+            Failed++;
+            failed.Add(robotId);
+        }
+
+        return failed;
+    }
+
+    private void EmitDeadlock(DeadlockInfo info)
+    {
+        var cells = info.Cells.Select(p => new CellDto(p.X, p.Y)).ToList();
+        _events?.Deadlock(info.Cycle[0], new DeadlockDetectedPayload(info.Cycle, cells, info.Resolution,
+            info.YieldRobotId ?? "", info.YieldTo?.X ?? 0, info.YieldTo?.Y ?? 0, info.SearchedDistance, info.ResolvedMs));
+    }
+
+    /// 틱 끝: 막혀 대기 중인 로봇의 재계획 트리거·쿨다운·상한(13 §6). FleetSimulation이 StepAllAsync·AfterStep 뒤에 부른다
+    public void ApplyReplans(long tick)
+    {
+        if (Stepper is null) return;
+        var cooldownTicks = Math.Max(1, _options.ReplanCooldownMs / _options.TickMs);
+        foreach (var run in _runs.Values)
+        {
+            if (run.Yielding || run.Phase is FleetPhase.Idle or FleetPhase.Error) continue;
+            if (run.Robot.Status != RobotStatus.Waiting || run.Task is not { } task) continue;
+            if (run.WaitTicks * _options.TickMs <= _options.ReplanWaitThresholdMs) continue;
+            if (run.LastReplanTick >= 0 && tick - run.LastReplanTick < cooldownTicks) continue;
+
+            if (run.ReplanCount >= _options.ReplanMaxPerTask)
+            {
+                Report(run, RobotStatus.Error, "replan_exceeded");
+                CloseEpisode(run, tick);
+                run.Robot.Status = RobotStatus.Error;
+                _events?.TaskEvent(run.Robot.RobotId, EventType.TaskFailed,
+                    new TaskFailedPayload(task.TaskId, run.Robot.RobotId, "replan_exceeded", run.Robot.Position.X, run.Robot.Position.Y));
+                task.Status = TaskStatus.Failed;
+                run.Robot.CurrentTaskId = null;
+                run.Task = null;
+                run.Phase = FleetPhase.Error;
+                Failed++;
+                continue;
+            }
+
+            var goal = run.Phase == FleetPhase.ToOrigin ? task.Origin : task.Destination;
+            var (outcome, oldLen, newLen, ms) = Stepper.Replan(run.Robot, goal);
+            run.LastReplanTick = tick;
+            if (outcome != RobotStepper.ReplanOutcome.Applied) continue;   // §6b 대안 없음·경로 없음 → 대기 유지(교착 탐지로)
+
+            run.ReplanCount++;
+            Report(run, RobotStatus.Moving, "replanned");
+            CloseEpisode(run, tick);
+            _events?.Replan(run.Robot.RobotId, new PathReplannedPayload(run.Robot.RobotId, task.TaskId, "blocked", oldLen, newLen, ms));
+            run.WaitTicks = 0;
+        }
+    }
+
+    /// run 종료: 드레인된 미완료 교착을 DeadlockDetected(failed)로 발행(13 §2 · §5)
+    public void FlushDeadlocks(IReadOnlyList<DeadlockInfo> drained)
+    {
+        foreach (var info in drained)
+            EmitDeadlock(info);
+    }
+
     public void OnStatusChanged(Robot robot, RobotStatus from, RobotStatus to, long tick)
     {
         var run = _runs[robot.RobotId];
@@ -148,6 +278,7 @@ internal sealed class TaskLifecycle : IRobotObserver
             case (RobotStatus.Waiting, RobotStatus.Moving):
                 Report(run, RobotStatus.Moving, "path_cleared");
                 CloseEpisode(run, tick);
+                run.WaitTicks = 0;   // 대기 종료 — 재계획 트리거(§6)가 묵은 대기로 오발하지 않게
                 break;
             case (RobotStatus.Moving, RobotStatus.Idle):
                 Arrived(run);
@@ -257,6 +388,12 @@ internal sealed class TaskLifecycle : IRobotObserver
         public Point LastPosition { get; set; } = robot.Position;
 
         public Episode? Episode { get; set; }
+
+        public bool Yielding { get; set; }
+
+        public int ReplanCount { get; set; }
+
+        public long LastReplanTick { get; set; } = -1;
     }
 
     private sealed record Episode(long StartTick, Point Cell, string Type, string BlockedBy);

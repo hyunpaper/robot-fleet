@@ -93,7 +93,7 @@ public interface IMoveArbiter   // 기존 메서드 유지 + 종료 마무리 �
 ### 탐지 시작·알고리즘
 
 ```
-시작: WaitMs >= deadlock_detect_wait_ms 인 거부 로봇만(04). 짧은 대기는 곧 풀리므로 보지 않는다
+시작: 순환의 모든 로봇이 WaitMs >= deadlock_detect_wait_ms 일 때만(04·진짜 교착은 동시 상호 차단). 한 대만 오래 기다린 과도기 순환은 제외
 찾기: 그 로봇에서 BlockedBy를 따라가며 방문 집합에 다시 나오면 순환(04). 함수형이라 O(체인), 보통 2~4
 ```
 

@@ -23,7 +23,8 @@ public static class DeadlockGraph
                 if (pos.TryGetValue(cur, out var idx))
                 {
                     var cycle = path.GetRange(idx, path.Count - idx);   // ρ 모양의 고리 부분만
-                    if (cycle.Any(r => waitMs.GetValueOrDefault(r) >= thresholdMs))
+                    // 진짜 교착은 모든 로봇이 임계 이상 서로 막혀 있다(동시 상호 차단). 한 대만 오래 기다린 과도기 순환은 제외(13 §3)
+                    if (cycle.All(r => waitMs.GetValueOrDefault(r) >= thresholdMs))
                         cycles.Add(Canonical(cycle));
                     break;
                 }
