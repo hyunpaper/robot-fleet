@@ -32,6 +32,12 @@ public static class WorkerMetrics
     public static readonly Counter DbRetry = Metrics.CreateCounter(
         "fleet_worker_db_retry_total", "저장 일시 오류 재시도");
 
+    public static readonly Counter BatchDedup = Metrics.CreateCounter(
+        "fleet_worker_batch_dedup_total", "한 배치 안에서 제거한 중복 eventId 수");
+
+    public static readonly Counter DeterministicDlq = Metrics.CreateCounter(
+        "fleet_worker_deterministic_dlq_total", "결정적 저장 오류(데이터 · 제약 · 문법)로 DLQ로 보낸 메시지 수");
+
     public static readonly Gauge QueueDepth = Metrics.CreateGauge(
         "fleet_queue_depth", "큐 대기 메시지 수", new GaugeConfiguration { LabelNames = ["queue"] });
 

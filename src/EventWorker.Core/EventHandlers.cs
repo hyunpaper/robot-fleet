@@ -25,6 +25,10 @@ public sealed class EventHandlers
     /// 반환: 처리 결과(독 메시지 tag 목록 포함). 저장소 · 발행 오류는 예외로 던진다(호출자가 같은 배치를 재시도)
     public async Task<BatchOutcome> HandleAsync(IReadOnlyList<Delivery> batch, CancellationToken ct)
     {
+        // 같은 eventId가 한 배치에 두 번 오면(재송신) 처음 1건만 — 나머지는 중복으로 센다(10 §6).
+        // 걸러낸 delivery는 poison이 아니라 나머지와 함께 multiple ack 된다(이미 저장된 사본의 중복이므로)
+        var (deliveries, intraBatchDuplicate) = BatchDedup.ByEventId(batch);
+
         var poison = new List<ulong>();
         var telemetry = new List<TelemetryRow>();
         var tasks = new List<TaskEventRow>();
@@ -33,7 +37,7 @@ public sealed class EventHandlers
         var runs = new List<RunEventRow>();
         var statuses = new List<(EventEnvelope Envelope, RobotStatusChangedPayload Payload, Delivery Delivery)>();
 
-        foreach (var d in batch)
+        foreach (var d in deliveries)
         {
             try
             {
@@ -95,8 +99,9 @@ public sealed class EventHandlers
         var stored = result.TelemetryInserted + result.TaskInserted + result.StatusInserted + result.ConflictInserted
                      + result.ReplanInserted + result.RunEvents;
         var duplicate = result.TelemetryDuplicate + result.TaskDuplicate + result.StatusDuplicate + result.ConflictDuplicate
-                        + result.ReplanDuplicate + duplicateStatus;
+                        + result.ReplanDuplicate + duplicateStatus + intraBatchDuplicate;
         WorkerMetrics.Record(batch, result, invalid.Count, poison.Count);
+        if (intraBatchDuplicate > 0) WorkerMetrics.BatchDedup.Inc(intraBatchDuplicate);
         return new BatchOutcome(poison, stored, duplicate, invalid.Count);
     }
 
