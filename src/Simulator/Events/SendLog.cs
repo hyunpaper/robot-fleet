@@ -3,7 +3,8 @@ using RobotFleet.Shared.Messaging;
 
 namespace RobotFleet.Simulator.Events;
 
-/// {directory}/{mapId}-{runId}.jsonl, 이벤트당 1행 {eventId,batchId,tick,eventType,category,key}. 202를 받은 배치만. 10 §5
+/// {directory}/{mapId}-{runId}.jsonl, 이벤트당 1행 {eventId,runId,batchId,tick,eventType,category,key}. 202를 받은 배치만. 10 §5.
+/// runId는 배치 봉투 값을 줄마다 싣는다 — Reconcile이 파일명에 기대지 않고 run 경계를 가른다
 public sealed class SendLog : IDisposable
 {
     private readonly FileStream _file;
@@ -29,6 +30,7 @@ public sealed class SendLog : IDisposable
             {
                 w.WriteStartObject();
                 w.WriteString("eventId", $"{batch.BatchId}/{i}");
+                w.WriteString("runId", batch.RunId);
                 w.WriteString("batchId", batch.BatchId);
                 w.WriteNumber("tick", batch.Tick);
                 w.WriteString("eventType", e.EventType);

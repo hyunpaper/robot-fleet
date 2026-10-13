@@ -24,8 +24,19 @@ public sealed record FleetOptions
 
     public long MaxTicks { get; init; } = 100_000;
 
-    /// 배치 봉투에 싣는 run 식별자(03). 생성은 호출부 몫
+    /// 배치 봉투에 싣는 run 식별자(03). 비어 있으면 FleetSimulation이 RunIds.New로 만든다
     public string RunId { get; init; } = "";
+
+    /// SimulationStarted.environment — local | aws (03)
+    public string Environment { get; init; } = "local";
+
+    /// 기준정보 코드(01). 아직 적재 전이면 빈 값 → DB NULL
+    public string LineCode { get; init; } = "";
+
+    public string TaskPatternCode { get; init; } = "";
+
+    /// 맵 파일 해시(RunIds.MapHash). 빈 값이면 DB 대조를 하지 않는다
+    public string MapHash { get; init; } = "";
 }
 
 /// ExitCode: 0 MaxTicks 도달, 4 송신 버퍼 닫힘(400 등), 130 취소

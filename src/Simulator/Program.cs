@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using RobotFleet.FleetController.Arbitration;
@@ -61,7 +60,7 @@ if (options.Robots is { } robotCount)
     }
 
     using var http = new HttpClient { BaseAddress = options.IngestUrl };
-    var runId = DateTime.UtcNow.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture);
+    var runId = RunIds.New(DateTimeOffset.UtcNow, robotCount);
     using var sendLog = options.SendLogDirectory is { } logDir ? new SendLog(logDir, map.MapId, runId) : null;
     await using var sender = new EventBatchSender(new HttpIngestClient(http), sendLog, new EventSenderOptions(), TimeProvider.System);
 
@@ -69,7 +68,9 @@ if (options.Robots is { } robotCount)
     using var senderCts = new CancellationTokenSource();
     var sendLoop = Task.Run(() => sender.RunAsync(senderCts.Token));
 
-    var result = await new FleetSimulation(map, fleetOptions with { RunId = runId }, sender, fleetDelay, fleetRenderer).RunAsync(cts.Token);
+    var mapHash = RunIds.MapHash(await File.ReadAllBytesAsync(options.MapPath));
+    var result = await new FleetSimulation(map, fleetOptions with { RunId = runId, MapHash = mapHash }, sender, fleetDelay, fleetRenderer)
+        .RunAsync(cts.Token);
     var unsent = await sender.DrainAsync(CancellationToken.None);
     senderCts.Cancel();
     try { await sendLoop; }

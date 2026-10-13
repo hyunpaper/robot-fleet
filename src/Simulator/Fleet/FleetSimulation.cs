@@ -28,6 +28,7 @@ public sealed class FleetSimulation
     private readonly TaskDispatcher _dispatcher = new();
     private readonly TaskLifecycle _lifecycle;
     private readonly RobotStepper _stepper;
+    private readonly string _runId;
     private EventCollector? _events;
     private Action<EventBatch>? _onBatch;
     private long _tick;
@@ -50,7 +51,8 @@ public sealed class FleetSimulation
         _renderer = renderer;
         _time = time;
         _generator = new TaskGenerator(map, options.Lambda, options.TickMs, options.Seed);
-        _events = sink is null ? null : new EventCollector(map.MapId, options.RunId, options.TickMs, time);
+        _runId = string.IsNullOrEmpty(options.RunId) ? RunIds.New(time.GetUtcNow(), options.Robots) : options.RunId;
+        _events = sink is null ? null : new EventCollector(map.MapId, _runId, options.TickMs, time);
         var planner = new AStarPathPlanner();
         _lifecycle = new TaskLifecycle(map, planner, options, _events);
 
@@ -86,11 +88,14 @@ public sealed class FleetSimulation
     {
         _onBatch += onBatch;
         if (_events is not null) return;
-        _events = new EventCollector(_map.MapId, _options.RunId, _options.TickMs, _time);
+        _events = new EventCollector(_map.MapId, _runId, _options.TickMs, _time);
         _lifecycle.UseEvents(_events);
     }
 
     public long Tick => _tick;
+
+    /// 배치 봉투의 runId(03)
+    public string RunId => _runId;
 
     public async Task<FleetRunResult> RunAsync(CancellationToken ct)
     {
@@ -123,13 +128,18 @@ public sealed class FleetSimulation
 
         if (exit != ExitSinkClosed && _events is not null)
         {
-            // 열린 대기 구간을 닫아 마지막 배치로 보낸다(종료 시 ConflictDetected 유실 방지)
+            // 열린 대기 구간을 닫아 마지막 배치로 보낸다(종료 시 ConflictDetected 유실 방지). SimulationEnded는 그 맨 뒤
             _events.Begin(_tick, _time.GetUtcNow());
             _lifecycle.FlushOpenConflicts(_tick);
+            _events.SimulationEnded(new SimulationEndedPayload(_tick, _generator.Created, _lifecycle.Completed, _lifecycle.Failed,
+                (int)_overruns, (long)_stall.TotalMilliseconds, exit == ExitCanceled ? "stopped" : "max_ticks"));
             foreach (var batch in _events.Complete([]).Where(b => b.Events.Count > 0))
             {
                 _onBatch?.Invoke(batch);
-                if (_sink is not null && !await WriteAsync(batch, CancellationToken.None)) exit = ExitSinkClosed;
+                if (_sink is null) continue;
+                // 취소(Ctrl+C)면 기다리지 않는다 — 송신이 막혀 버퍼가 찬 상태에서 영원히 멈추지 않게. 못 넣은 배치는 송신 로그에도 없어 대조 대상이 아니다
+                if (exit == ExitCanceled) _sink.TryWrite(batch);
+                else if (!await WriteAsync(batch, CancellationToken.None)) exit = ExitSinkClosed;
             }
         }
 
@@ -142,6 +152,7 @@ public sealed class FleetSimulation
         _tick++;
         var now = _time.GetUtcNow();
         _events?.Begin(_tick, now);
+        if (_tick == 1) _events?.SimulationStarted(StartedPayload());
 
         foreach (var task in _generator.Next(now))
         {
@@ -187,6 +198,11 @@ public sealed class FleetSimulation
             SimulatorMetrics.TickStall.WithLabels("event_buffer").Observe(stalled.Elapsed.TotalSeconds);
         }
     }
+
+    private SimulationStartedPayload StartedPayload() => new(
+        _options.Robots, _options.SpeedFactor, _options.TickMs, _options.Seed, _options.Environment, _options.LineCode,
+        _map.MapId, _map.Version, _options.MapHash, _options.TaskPatternCode,
+        new Dictionary<string, System.Text.Json.JsonElement>());   // 04 설정값 스냅샷은 외부화(M4 직전) 때 채운다
 
     private void Overrun()
     {

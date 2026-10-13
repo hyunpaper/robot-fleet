@@ -35,6 +35,32 @@ public sealed class FleetTests
         return (result, batches);
     }
 
+    [Fact]
+    public async Task run_첫_배치_맨_앞은_SimulationStarted_마지막_배치_맨_뒤는_SimulationEnded()
+    {
+        var (result, batches) = await RunAsync(Options(3, 0.5, 50) with { MapHash = "sha256:ab" });
+
+        var items = Items(batches).Select(x => x.Item.EventType).ToList();
+        items[0].Should().Be(EventType.SimulationStarted);
+        items[^1].Should().Be(EventType.SimulationEnded);
+        items.Count(t => t == EventType.SimulationStarted).Should().Be(1);
+        items.Count(t => t == EventType.SimulationEnded).Should().Be(1);
+        batches.Select(b => b.RunId).Distinct().Should().ContainSingle().Which.Should().MatchRegex(@"^\d{8}-\d{6}-r3$");
+
+        var started = StoreMapping.Read<SimulationStartedPayload>(batches[0].Events[0].Payload);
+        (started.Robots, started.MapId, started.MapVersion, started.MapHash, started.Environment)
+            .Should().Be((3, Factory.MapId, Factory.Version, "sha256:ab", "local"));
+        var ended = StoreMapping.Read<SimulationEndedPayload>(batches[^1].Events[^1].Payload);
+        (ended.Ticks, ended.TasksCreated, ended.Reason).Should().Be((result.Ticks, result.TasksCreated, "max_ticks"));
+    }
+
+    [Fact]
+    public void runId는_날짜_시각_로봇_수_형식이고_맵_해시는_sha256()
+    {
+        RunIds.New(DateTimeOffset.Parse("2026-10-13T14:30:22Z"), 200).Should().Be("20261013-143022-r200");
+        RunIds.MapHash("abc"u8.ToArray()).Should().Be("sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    }
+
     private static IEnumerable<(EventBatch Batch, EventItem Item)> Items(IEnumerable<EventBatch> batches) =>
         batches.SelectMany(b => b.Events.Select(e => (b, e)));
 

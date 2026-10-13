@@ -63,5 +63,6 @@ public sealed class SenderTests : IDisposable
         lines.Select(l => (l.GetProperty("eventId").GetString(), l.GetProperty("category").GetString(), l.GetProperty("key").GetString(),
                 l.GetProperty("tick").GetInt64()))
             .Should().Equal(($"{batch.BatchId}/0", "task", "T-1", 5L), ($"{batch.BatchId}/1", "telemetry", "R-1", 5L));
+        lines.Should().OnlyContain(l => l.GetProperty("runId").GetString() == "r1", "줄마다 배치 봉투의 runId(Reconcile run 경계)");
     }
 }
