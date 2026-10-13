@@ -26,6 +26,19 @@
 
 로봇 12대가 좌하단과 우상단 주차 구역에서 출발해 CNC·프레스·로봇 셀·조립대·포장기 등 설비의 픽업·드롭오프 지점을 오간다. 지나간 칸은 로봇 색으로 물들었다가 서서히 옅어지고, 적재 중인 로봇은 화물 상자를 싣고 이동한다. 같은 칸을 동시에 요청하면 우선순위가 낮은 로봇이 `WAIT` 상태로 양보한다. 우측 패널은 로봇을 대기와 작업 중으로 나눠 보여 준다.
 
+### 관제 화면 (초안)
+
+관제 뷰는 수집한 운행 데이터와 기준정보(라인·설비·스테이션)를 조인한 MES형 화면을 함께 보여 주고, 관리 콘솔은 AI Agent의 제안을 근거·검증 결과와 함께 받아 승인한다.
+
+<a href="https://raw.githubusercontent.com/hyunpaper/robot-fleet/main/docs/images/control-view.png"><img src="docs/images/control-view.png" alt="관제 뷰"></a>
+
+<details>
+<summary>관리 콘솔</summary>
+
+<a href="https://raw.githubusercontent.com/hyunpaper/robot-fleet/main/docs/images/admin-console.png"><img src="docs/images/admin-console.png" alt="관리 콘솔"></a>
+
+</details>
+
 ---
 
 ## 현재 상태
@@ -40,20 +53,20 @@
 | M6 | Prometheus + Grafana, 실시간 관제 화면, run 재생 데이터 내보내기·정적 재생기 | |
 | M7 | 실험(AWS): 로봇 수별 처리량, 회피 전략·우선순위 정책 비교 | |
 | M8 | 장애 주입: pod 강제 종료, Redis·브로커 장애 조치, 노드 drain·강제 소실, 네트워크 지연 | |
-| M9 | 교착 분석 에이전트: 원인 진단, 정책 파라미터 수정안 생성, 승인 후 자동 배포 | |
+| M9 | AI Agent(교착 분석·인프라), 요청 서비스와 관리 콘솔: 정책 파라미터·운영 조치 제안, 승인 후 반영 | |
 
 ### 남은 작업
 
 | 단계 | 할 일 |
 |---|---|
 | M2 | 대기 그래프 순환 탐지, 회피 지점 양보, 1칸 통로 정면 대치 해소 |
-| M3 | 실서버 통합 테스트 41건 실행, 워커 kill·Ingest 재시작 포함 30분 E2E로 유실 0·중복 0 확인 |
+| M3 | 실서버 통합 테스트 47건 실행, 워커 kill·Ingest 재시작 포함 30분 E2E로 유실 0·중복 0 확인 |
 | M4 | Redis 이동 판정기(해시 체인 워터마크, 커밋·재주장 Lua), 관제 서버 2대 재전송 멱등, 장애 조치 감지 |
 | M5 | 노드 3대 k3s 구성, Redis Sentinel·RabbitMQ 3노드 배포, quorum 멤버 확장 |
 | M6 | Prometheus 수집, Grafana 대시보드, 실시간 관제 화면(QueryApi·WebSocket), run 재생 데이터 내보내기와 정적 재생기 |
 | M7 | run 전환 기능 뒤 AWS에서 로봇 수별 처리량, 회피 전략·우선순위 정책·통로 폭·혼잡 가중치 비교 실험 |
 | M8 | Redis primary·RabbitMQ leader·관제 서버·노드 장애 주입(drain·강제 소실·node-1 API 서버), 겹침 0·유실 0·정지 시간 측정 |
-| M9 | 교착 이력 기반 원인 분류(규칙), 로컬 LLM의 정책 파라미터 수정안 생성, 자동 검증 후 승인·배포 파이프라인 |
+| M9 | 요청 서비스(ControlApi)·관리 콘솔, 교착 분석 에이전트(정책 파라미터 수정안·자동 검증), 인프라 에이전트(운영 조치 제안), 승인 후 반영 |
 
 ---
 
