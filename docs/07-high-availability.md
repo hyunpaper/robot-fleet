@@ -191,3 +191,5 @@ Redis · RabbitMQ 멤버는 세 노드 전부에 있고, 노드별 차이는 k3s
 | 총괄 결정 | Simulator는 node-1을 피한다 | k3s server · PostgreSQL과 같은 노드에 두면 node-1 장애가 "틱 정지 + 재배치 불가"가 된다. node-2 · 3에 두면 node-1 장애에도 틱이 이어지고, node-2 · 3 장애는 재시작(새 epoch)으로 끝난다. 08 §10 · §11 배치 · 수치 갱신 |
 | 사용자 확정 (갱신) | worker CPU 4 vCPU (위 "확인 필요") → **노드 4 vCPU · 8GiB × 3 = 12 vCPU, 호스트 6코어 오버커밋 수용** | 실제 시뮬레이터까지 문제없이 돌리는 것이 기준. 기능 · 장애 테스트 용도라 오버커밋을 받아들이고, 성능 수치는 M7 AWS에서 낸다 |
 | 사용자 확정 | 운영 구성 | M3 · M4: 인프라 VM 1대(192.168.10.11, Ubuntu 24.04, 4 vCPU · 8GB, RabbitMQ · Redis · PostgreSQL 16) + Windows PC에서 Simulator · 앱 실행. M5부터: k3s node-1~3을 처음부터 실험 구성(4 vCPU · 8GiB × 3)으로 상시 운영 |
+| 총괄 결정 | 승인 · 조작은 ControlApi로 분리, 내부 전용 | QueryApi는 읽기 전용 · 터널 노출 가능으로 남기고, 쓰기 · 실행 권한(GitHub 토큰, EventWorker HPA patch만 허용된 RBAC)은 ControlApi만 갖는다. 터널 미등록 + ingress 내부 대역 허용 목록. 10 D5와 같은 원칙(12) |
+| 총괄 결정 | 에이전트 2종(교착 · 인프라)은 규칙 사실 → 열거된 액션 → 사람 승인 | 자동 실행 없음. 장애 조치 경로(Sentinel 승격 · quorum 리더 · 워커 재배정)에 끼지 않고, 안전성 불변식 · 과반 관련 액션은 선택지에 없다. LLM은 클러스터 밖 집 PC, 규칙 · 검증 · 실행은 ControlApi. 파라미터 변경은 다음 run부터(12) |
