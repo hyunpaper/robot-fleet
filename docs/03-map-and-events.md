@@ -103,7 +103,7 @@ JSON 숫자 배열은 사람이 읽을 수 없다.
 ```csharp
 public sealed class Robot
 {
-    public string  RobotId   { get; init; }      // "R-001"
+    public string  RobotId   { get; init; }      // "R-001" — $"R-{index:D3}", index 는 1부터
     public string  MapId     { get; init; }
     public Point   Position  { get; set; }       // 현재 셀
     public Heading Heading   { get; set; }       // 0~3
@@ -134,6 +134,10 @@ public enum RobotStatus : byte
 
 이 둘을 섞으면 "로봇이 부족한가, 길이 막힌 건가"를 구분할 수 없다.
 
+> **`RobotId` 생성 규칙은 재현성의 일부다.** 10 §1의 `TaskDispatcher`가 동점을 **`robotId` 오름차순**으로 정하므로
+> 규칙이 바뀌면 같은 시드로도 할당 결과가 달라진다. 3자리면 999대까지 문자열 정렬이 자연 정렬과 같고,
+> 05 실험 1의 최대치(150대)에 충분하다.
+
 ### Task
 
 ```csharp
@@ -144,12 +148,22 @@ public sealed class TransportTask
     public TaskType Type   { get; init; }
     public Point  Origin   { get; init; }        // 적재 지점
     public Point  Destination { get; init; }     // 하역 지점
+    public string? OriginStationCode { get; init; }   // "ST-01"
+    public string? DestStationCode   { get; init; }
+    public string? OriginEquipCode   { get; init; }   // "EQ-01"
+    public string? DestEquipCode     { get; init; }
     public int    Priority { get; init; }        // 0=normal, 1=high
     public DateTimeOffset CreatedAt { get; init; }
     public string? AssignedRobotId { get; set; }
     public TaskStatus Status { get; set; }
 }
+```
 
+> `Origin` · `Destination` 좌표는 **유지**한다. 경로 계획은 좌표로 하고, 설비 식별자는 **분석과 재현**용이다.
+> 05 실험 4(맵 3종 비교)는 맵이 바뀌면 좌표가 바뀌므로, **같은 설비 쌍**으로 작업을 재현하려면 좌표만으로는 안 된다.
+> 설비 · 접점의 마스터는 01 "기준정보".
+
+```csharp
 public enum TaskType : byte
 {
     Transport = 0,   // 적재 → 하역
@@ -184,6 +198,7 @@ public enum TaskStatus : byte
 | DeadlockDetected | 배치 이동 판정 응답의 `deadlock` 항목 | Simulator (응답을 이벤트로 변환) |
 | PathReplanned | 재계획 API 응답 (`oldLength/newLength/computeMs`) | Simulator (응답을 이벤트로 변환) |
 | RobotStatusChanged | 로봇 상태 전이 — Simulator가 수행 | Simulator |
+| SimulationStarted / SimulationEnded | run 시작 · 종료 — Simulator만 안다 | Simulator |
 
 > **발행자를 하나로 두는 이유** — FleetController는 무상태·다중 pod다. 두 서비스가
 > 같은 로봇의 이벤트를 따로 보내면 `RobotStatusChanged`(Simulator)와
@@ -204,6 +219,7 @@ public enum TaskStatus : byte
   "eventId":    "018f3c2a-7b1e-7c3d-9a2f-0123456789ab/17",   // "{batchId}/{index}"
   "eventType":  "RobotTelemetry",
   "mapId":      "factory-a",
+  "runId":      "20261013-143022-r200",   // run 식별자
   "tick":       142057,                   // 시뮬레이터 틱 번호
   "tickMs":     100,                      // 틱 1회의 시뮬레이션 시간 (ms)
   "occurredAt": "2026-04-01T09:14:23.412Z",
@@ -214,12 +230,17 @@ public enum TaskStatus : byte
 | 필드 | 용도 |
 |---|---|
 | `eventId` | **멱등 키**. `{batchId}/{index}`. `batchId`는 UUID v7이라 시간순 정렬이 되어 디버깅에 유리 |
+| `runId` | Simulator가 run 시작 때 생성해 **그 run의 모든 배치에 싣는다.** 형식은 `{yyyyMMdd}-{HHmmss}-r{robots}` (송신 로그 파일명과 같은 값). `tick`은 run마다 0부터 다시 시작하므로 **run을 가르는 유일한 수단**이다. 배치 봉투 값을 Ingest가 항목마다 복사 |
 | `tick` | 시뮬레이터 내부 논리 시각. 배속을 바꿔도 순서가 보존됨 |
 | `tickMs` | 틱 1회가 나타내는 시뮬레이션 시간. 워커가 telemetry 1행을 상태별 시간(05 시간 분해)으로 환산할 때 쓴다. 배치 봉투 값을 Ingest가 항목마다 복사 |
 | `occurredAt` | 실제 발생 시각. 지연 도착 판정에 사용 |
 
 > `tick`과 `occurredAt`을 둘 다 두는 이유 — 배속 60으로 돌리면 실제 1초에
 > 60틱이 지난다. `occurredAt`만으로는 틱 순서를 복원할 수 없다.
+
+> **`runId`를 봉투에 싣는 이유는 `tickMs`와 같다**(09 §2) — 워커가 run을 추론하게 두면 송신 버퍼 60초 때문에
+> 전환 경계가 섞이고, 워커 2대가 서로 다른 답을 낸다. 봉투에 싣는 쪽이 유일하게 안전하다.
+> run은 "언제 적재됐나"가 아니라 "어느 시뮬레이션이 만들었나"이고, 그건 Simulator만 안다.
 
 ### 배치 봉투와 eventId 규칙
 
@@ -230,6 +251,7 @@ POST /api/v1/events/batch
 {
   "batchId":    "018f3c2a-7b1e-7c3d-9a2f-0123456789ab",   // UUID v7, 틱당 1개
   "mapId":      "factory-a",
+  "runId":      "20261013-143022-r200",
   "tick":       142057,
   "tickMs":     100,
   "occurredAt": "2026-04-01T09:14:23.412Z",
@@ -376,15 +398,20 @@ POST /api/v1/events/batch
   "payload": {
     "cycle":      ["R-012", "R-034", "R-007"],   // 순환 대기 체인
     "cells":      [{"x":23,"y":14},{"x":24,"y":14},{"x":24,"y":15}],
-    "resolution": "yield",
+    "resolution": "yield",          // yield | failed
     "yieldRobotId": "R-007",
     "yieldToX": 24, "yieldToY": 16,
+    "searchedDistance": 5,          // 회피 지점 탐색 거리 (상한에 걸렸으면 = yield_search_max_distance)
     "resolvedMs": 1200
   }
 }
 ```
 
 드물게 발생하지만 **발생률과 해소 시간이 알고리즘 품질의 직접 지표**가 된다.
+
+`resolution: "failed"`는 04의 "양보 지점을 찾지 못하면 `Failed` 처리 — 맵 설계 문제 신호"에 해당한다.
+`searchedDistance`가 `yield_search_max_distance`와 같으면 탐색 상한에 걸린 것이다.
+M9 1단계가 이 두 값으로 `no_yield_point`를 판정한다(04 "M9 교착 분석 에이전트의 액션 공간").
 
 ### 8. PathReplanned — 경로 재계획
 
@@ -419,6 +446,49 @@ POST /api/v1/events/batch
 }
 ```
 
+### 10. SimulationStarted · SimulationEnded — run 시작 · 종료
+
+라우팅 키는 **`mapId`**(로봇에 속하지 않는다).
+
+```json
+{
+  "eventType": "SimulationStarted",
+  "payload": {
+    "robots":   200,
+    "speed":    1.0,
+    "tickMs":   100,
+    "taskSeed": 20261013,
+    "environment": "local",           // local | aws
+    "lineId":   "L-A",
+    "mapId":    "factory-a",
+    "mapVersion": 1,
+    "mapHash":  "sha256:9f1c…",
+    "taskPatternId": "P-A-standard",
+    "params": { "congestion_alpha": 0, "turn_cost": 0.5 }
+  }
+}
+```
+
+```json
+{
+  "eventType": "SimulationEnded",
+  "payload": {
+    "ticks": 72000, "tasksCreated": 4180, "tasksCompleted": 4102, "tasksFailed": 11,
+    "overruns": 3, "stallMs": 0, "reason": "max_ticks"
+  }
+}
+```
+
+| 규칙 | 내용 |
+|---|---|
+| 발행 위치 | `SimulationStarted`는 **첫 배치의 맨 앞**, `SimulationEnded`는 **마지막 배치의 맨 뒤** |
+| 큐 범주 | `task`와 같은 **quorum 큐**(유실 불가). 실험 조건이 사라지면 그 run 전체가 무의미해진다 |
+| `reason` | `max_ticks` / `stopped` / `faulted` |
+| `environment` | `local`(집 PC VM) / `aws`(M7). 하드웨어가 바뀌면 다른 조건이다(05 "동일 조건에서 변수 하나만") |
+| `params` | 04 "설정값" 13종의 스냅샷. 05가 요구하는 실험 조건 기록이 자동으로 남고, M9의 "과거 동일 유형 조치와 결과"도 이 값으로 조인한다 |
+| `mapHash` | Simulator가 읽은 맵 파일의 해시. DB `maps`의 해당 버전 해시와 다르면 경고 — **맵 파일을 고치고 `version`을 안 올리면 과거 run의 해석이 조용히 틀어진다** |
+| 워커 처리 | `simulations` 테이블 upsert (01) |
+
 ---
 
 ## 이벤트 → 큐 매핑
@@ -431,6 +501,7 @@ POST /api/v1/events/batch
 | DeadlockDetected | `fleet.conflict` | yes | 아니오 |
 | PathReplanned | `fleet.conflict` | no | 예 |
 | RobotStatusChanged | `fleet.task` | yes | 아니오 |
+| SimulationStarted / SimulationEnded | `fleet.task` | yes | 아니오 |
 
 ---
 
@@ -488,7 +559,8 @@ POST /api/v1/events/batch
 λ = 5   건/초  →  로봇 100대 수준
 ```
 
-출발지·목적지는 Station 목록에서 무작위 선택하되, **같은 지점이면 재추첨**한다.
+출발지·목적지는 작업 패턴(01 기준정보 `task_pattern_flows`)의 `weight`에 따라 **설비 쌍**을 추첨한다.
+출발지와 목적지가 같은 흐름은 DB 제약(`ck_flow_distinct`)이 막는다. 시드를 고정하면 같은 작업열이 재현된다.
 
 ### 로봇 초기 배치
 
