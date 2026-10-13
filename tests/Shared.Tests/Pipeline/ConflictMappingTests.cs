@@ -16,7 +16,7 @@ public sealed class ConflictMappingTests
     {
         var row = Row(new DeadlockDetectedPayload(
             Cycle: new[] { "R-001", "R-002" }, Cells: new[] { new CellDto(3, 4) },
-            Resolution: "yield", YieldRobotId: "R-002", YieldToX: 5, YieldToY: 6, SearchedDistance: 4, ResolvedMs: 120));
+            Resolution: "yield", YieldRobotId: "R-002", YieldToX: 5, YieldToY: 6, SearchedDistance: 4, NoYieldRetries: 0, ResolvedMs: 120));
 
         var change = StoreMapping.ToConflict(row);
 
@@ -32,7 +32,7 @@ public sealed class ConflictMappingTests
         // 해소 실패 — YieldRobotId 빈 문자열, YieldToX/Y는 기본 0으로 오지만 좌표가 아니다
         var row = Row(new DeadlockDetectedPayload(
             Cycle: new[] { "R-001", "R-002" }, Cells: new[] { new CellDto(3, 4) },
-            Resolution: "failed", YieldRobotId: "", YieldToX: 0, YieldToY: 0, SearchedDistance: 5, ResolvedMs: 0));
+            Resolution: "failed", YieldRobotId: "", YieldToX: 0, YieldToY: 0, SearchedDistance: 5, NoYieldRetries: 2, ResolvedMs: 0));
 
         var change = StoreMapping.ToConflict(row);
 
@@ -41,5 +41,6 @@ public sealed class ConflictMappingTests
         change.YieldToY.Should().BeNull();
         change.Resolution.Should().Be((short)3);   // failed
         change.SearchedDistance.Should().Be((short)5);   // 회피 지점 없어도 탐색 상한은 남는다
+        change.NoYieldRetries.Should().Be(2);   // 재시도 횟수(M9 no_yield_point 판정)
     }
 }

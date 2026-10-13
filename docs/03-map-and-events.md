@@ -124,7 +124,7 @@ public enum RobotStatus : byte
     Loading   = 3,   // 적재 중
     Unloading = 4,   // 하역 중
     Charging  = 5,
-    Error     = 6,   // 경로 없음, 교착 해소 실패 등
+    Error     = 6,   // 경로 없음, 배터리 방전, 재계획 상한 초과 등
 }
 ```
 
@@ -366,7 +366,7 @@ POST /api/v1/events/batch
   "payload": {
     "taskId":  "T-00042",
     "robotId": "R-012",
-    "reason":  "no_path",       // no_path | timeout | deadlock_unresolved | replan_exceeded | battery
+    "reason":  "no_path",       // no_path | timeout | replan_exceeded | battery
     "atX": 23, "atY": 14
   }
 }
@@ -398,20 +398,22 @@ POST /api/v1/events/batch
   "payload": {
     "cycle":      ["R-012", "R-034", "R-007"],   // 순환 대기 체인
     "cells":      [{"x":23,"y":14},{"x":24,"y":14},{"x":24,"y":15}],
-    "resolution": "yield",          // yield | failed
+    "resolution": "yield",          // yield | reroute | failed
     "yieldRobotId": "R-007",
     "yieldToX": 24, "yieldToY": 16,
     "searchedDistance": 5,          // 회피 지점 탐색 거리 (상한에 걸렸으면 = yield_search_max_distance)
-    "resolvedMs": 1200
+    "noYieldRetries": 0,            // 회피 지점 없이 재시도한 횟수(M9 no_yield_point 판정)
+    "resolvedMs": 1200             // 최초 탐지부터 종료까지 총 경과
   }
 }
 ```
 
 드물게 발생하지만 **발생률과 해소 시간이 알고리즘 품질의 직접 지표**가 된다.
 
-`resolution: "failed"`는 04의 "양보 지점을 찾지 못하면 `Failed` 처리 — 맵 설계 문제 신호"에 해당한다.
-`searchedDistance`가 `yield_search_max_distance`와 같으면 탐색 상한에 걸린 것이다.
-M9 1단계가 이 두 값으로 `no_yield_point`를 판정한다(04 "M9 교착 분석 에이전트의 액션 공간").
+**에피소드당 1건, 종료 때 발행한다**(최초 탐지~종료): 양보 완료 → `yield`, 순환 소멸(구성원이 대안으로 빠짐) → `reroute`,
+run 종료 시 미해소 → `failed`. `resolvedMs`는 모두 최초 탐지부터의 총 경과다. 회피 지점이 없으면 작업을 실패시키지 않고
+`deadlock_detect_wait_ms` 간격으로 재시도하며, 그때마다 `noYieldRetries`가 는다(13 §5).
+M9 1단계는 **`noYieldRetries > 0`**으로 `no_yield_point`를 판정한다(04 "M9 교착 분석 에이전트의 액션 공간").
 
 ### 8. PathReplanned — 경로 재계획
 
@@ -513,7 +515,7 @@ M9 1단계가 이 두 값으로 `no_yield_point`를 판정한다(04 "M9 교착 �
 |---|---|---|---|---|---|---|---|
 | **Idle** | — | `task_assigned` | ✗ | ✗ | ✗ | `charge_at_station` | `fault` |
 | **Moving** | `arrived_park` `arrived_charge_denied` | — | `conflict_wait` | `arrived_origin` | `arrived_destination` | `arrived_charger` | `no_path` `replan_exceeded` `fault` |
-| **Waiting** | ✗ | `path_cleared` `replanned` `yield` | — | ✗ | ✗ | ✗ | `deadlock_unresolved` `replan_exceeded` `fault` |
+| **Waiting** | ✗ | `path_cleared` `replanned` `yield` | — | ✗ | ✗ | ✗ | `replan_exceeded` `fault` |
 | **Loading** | ✗ | `load_done` | ✗ | — | ✗ | ✗ | `fault` |
 | **Unloading** | `unload_done` | ✗ | ✗ | ✗ | — | ✗ | `fault` |
 | **Charging** | `charge_done` | ✗ | ✗ | ✗ | ✗ | — | `fault` |

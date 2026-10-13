@@ -89,6 +89,7 @@ internal sealed class TaskLifecycle : IRobotObserver
                 run.Moves, run.MoveTicks * _options.TickMs, run.WaitTicks * _options.TickMs, 2 * _options.WorkMs, 0));
             run.Task = null;
             run.Phase = FleetPhase.Idle;
+            run.Yielding = false;   // 작업 종료 시 양보 표시 해제(13 §7)
             Completed++;
         }
     }
@@ -134,7 +135,9 @@ internal sealed class TaskLifecycle : IRobotObserver
             decision.BlockedBy ?? robot.RobotId);
     }
 
-    /// 판정 응답의 교착 해소를 적용한다(13 §2 · §5). 반환 = 이번 틱 결정을 건너뛸 로봇들
+    /// 판정 응답의 교착 해소를 적용한다(13 §2 · §5). 반환 = 이번 틱 결정을 건너뛸 로봇들.
+    /// Detected는 양보 경로를 심고(미발행), 에피소드 종료(Resolved·Reroute·Failed)는 1건만 발행한다.
+    /// 회피 지점이 없어도 작업을 실패시키지 않는다 — 대기 유지 + 재시도는 해소기가 하고 Simulator는 종료 때만 발행(사용자 결정, 07)
     public IReadOnlyCollection<string> OnDeadlock(DeadlockInfo info, long tick)
     {
         if (!info.IsNew) return Array.Empty<string>();   // 재사용·재전송은 중복 발행·실행하지 않는다
@@ -144,20 +147,11 @@ internal sealed class TaskLifecycle : IRobotObserver
                 var yielded = StartYield(info, tick);
                 return yielded is null ? Array.Empty<string>() : new[] { yielded };
             case DeadlockPhase.Resolved:
-                EmitDeadlock(info);
-                if (_runs.TryGetValue(info.YieldRobotId!, out var yr)) yr.Yielding = false;
-                return Array.Empty<string>();
+            case DeadlockPhase.Reroute:
             case DeadlockPhase.Failed:
                 EmitDeadlock(info);
-                // TTL 만료(양보가 안 끝남) = YieldRobotId 있음: 이벤트만, 양보 로봇은 재계획으로 복귀(13 §5). 작업은 실패시키지 않는다.
-                // 회피 지점 없음 = YieldRobotId null: 순환 전원 실패
-                if (info.YieldRobotId is { } ttlYield)
-                {
-                    if (_runs.TryGetValue(ttlYield, out var tr)) tr.Yielding = false;
-                    return Array.Empty<string>();
-                }
-
-                return FailCycle(info, tick);
+                if (info.YieldRobotId is { } yrId && _runs.TryGetValue(yrId, out var yr)) yr.Yielding = false;
+                return Array.Empty<string>();
             default:
                 return Array.Empty<string>();
         }
@@ -193,36 +187,12 @@ internal sealed class TaskLifecycle : IRobotObserver
         return robotId;
     }
 
-    // 회피 지점 없는 교착: 순환 전원 작업 실패 + Waiting → Error(13 §5)
-    private IReadOnlyCollection<string> FailCycle(DeadlockInfo info, long tick)
-    {
-        var failed = new List<string>();
-        foreach (var robotId in info.Cycle)
-        {
-            // 실제로 막혀 대기 중인 로봇만 실패시킨다(진짜 교착은 전원 Waiting). 양보 중·이동 중은 건드리지 않는다
-            if (!_runs.TryGetValue(robotId, out var run) || run.Task is not { } task) continue;
-            if (run.Yielding || run.Reported != RobotStatus.Waiting) continue;
-            Report(run, RobotStatus.Error, "deadlock_unresolved");
-            CloseEpisode(run, tick);
-            run.Robot.Status = RobotStatus.Error;
-            _events?.TaskEvent(robotId, EventType.TaskFailed,
-                new TaskFailedPayload(task.TaskId, robotId, "deadlock_unresolved", run.Robot.Position.X, run.Robot.Position.Y));
-            task.Status = TaskStatus.Failed;
-            run.Robot.CurrentTaskId = null;
-            run.Task = null;
-            run.Phase = FleetPhase.Error;
-            Failed++;
-            failed.Add(robotId);
-        }
-
-        return failed;
-    }
-
     private void EmitDeadlock(DeadlockInfo info)
     {
         var cells = info.Cells.Select(p => new CellDto(p.X, p.Y)).ToList();
         _events?.Deadlock(info.Cycle[0], new DeadlockDetectedPayload(info.Cycle, cells, info.Resolution,
-            info.YieldRobotId ?? "", info.YieldTo?.X ?? 0, info.YieldTo?.Y ?? 0, info.SearchedDistance, info.ResolvedMs));
+            info.YieldRobotId ?? "", info.YieldTo?.X ?? 0, info.YieldTo?.Y ?? 0, info.SearchedDistance, info.NoYieldRetries,
+            info.ResolvedMs));
     }
 
     /// 틱 끝: 막혀 대기 중인 로봇의 재계획 트리거·쿨다운·상한(13 §6). FleetSimulation이 StepAllAsync·AfterStep 뒤에 부른다
@@ -248,6 +218,7 @@ internal sealed class TaskLifecycle : IRobotObserver
                 run.Robot.CurrentTaskId = null;
                 run.Task = null;
                 run.Phase = FleetPhase.Error;
+                run.Yielding = false;   // 작업 종료 시 양보 표시 해제(13 §7)
                 Failed++;
                 continue;
             }

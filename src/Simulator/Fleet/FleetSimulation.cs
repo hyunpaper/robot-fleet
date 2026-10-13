@@ -174,6 +174,10 @@ public sealed class FleetSimulation
         _lifecycle.AfterStep();
         _lifecycle.ApplyReplans(_tick);
 
+        var (unresolvedActive, unresolvedOldestMs) = _arbiter.UnresolvedDeadlocks(_tick);
+        SimulatorMetrics.DeadlockUnresolvedActive.WithLabels(_map.MapId).Set(unresolvedActive);
+        SimulatorMetrics.DeadlockUnresolvedOldestSeconds.WithLabels(_map.MapId).Set(unresolvedOldestMs / 1000.0);
+
         if (_events is null) return true;
         foreach (var batch in _events.Complete(_robots.Select(_lifecycle.TelemetryOf)))
         {

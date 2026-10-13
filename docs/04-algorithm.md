@@ -267,7 +267,9 @@ Point? FindYieldPoint(Robot robot, int maxDistance = 5)   // 설정: yield_searc
 ```
 
 양보 지점을 찾지 못하면 **탐색 범위를 넓히고**, 그래도 없으면
-해당 작업을 `Failed` 처리한다. (이 경우를 메트릭으로 집계 — 맵 설계 문제 신호)
+**작업을 실패시키지 않고 대기를 유지한 채 `deadlock_detect_wait_ms` 간격으로 재시도**한다(다음 시도에서 다른 로봇을 양보시킬 수 있다).
+장기 미해소는 **경보**로 알린다(게이지 `fleet_deadlock_unresolved_active`·`fleet_deadlock_unresolved_oldest_seconds` — 맵 설계 문제 신호).
+작업 실패 시간 상한은 두지 않는다(사용자 결정, 07). 재시도는 재계획 상한에 세지 않고, 실제 양보 경로를 심는 순간만 센다.
 
 ### 해소 절차
 
@@ -416,7 +418,7 @@ M9는 자유 코드 생성이 아니라 **허용된 파라미터 중 선택 + �
 | `following_delay` | `ConflictDetected.conflictType == "following"` |
 | `replan_storm` | `PathReplanned` 수 (재계획 상한) |
 | `starvation` | `TaskCompleted` 리드타임 p99 (05) |
-| `no_yield_point` | `DeadlockDetected.resolution == "failed"` · `searchedDistance` |
+| `no_yield_point` | `DeadlockDetected.noYieldRetries > 0`(회피 지점 없이 재시도) |
 
 | 등급 | 범위 | 처리 |
 |---|---|---|

@@ -124,6 +124,8 @@ fleet_robots_active{map_id, status}        // status별 로봇 수
 fleet_tasks_pending{map_id}
 fleet_queue_depth{queue}
 fleet_simulation_tick{map_id}
+fleet_deadlock_unresolved_active{map_id}           // 회피 지점 없이 재시도 중인 교착 수(13 §5, 경보)
+fleet_deadlock_unresolved_oldest_seconds{map_id}   // 그 중 가장 오래된 것의 경과(초)
 
 // 히스토그램
 fleet_move_decision_seconds                // 이동 판단 소요

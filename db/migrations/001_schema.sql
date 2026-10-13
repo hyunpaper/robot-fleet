@@ -80,6 +80,7 @@ CREATE TABLE conflict_log (
     yield_robot_id    TEXT,
     yield_to_x        SMALLINT, yield_to_y SMALLINT,
     searched_distance SMALLINT,
+    no_yield_retries  INT,                 -- 회피 지점 없이 재시도한 횟수(M9 no_yield_point 판정, 13 §5)
     occurred_at       TIMESTAMPTZ NOT NULL
 );
 CREATE INDEX ix_conflict_log_run ON conflict_log (run_id);

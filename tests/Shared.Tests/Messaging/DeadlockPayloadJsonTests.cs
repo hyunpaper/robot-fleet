@@ -8,7 +8,7 @@ namespace RobotFleet.Shared.Tests.Messaging;
 public class DeadlockPayloadJsonTests
 {
     private const string YieldJson =
-        """{"cycle":["R-012","R-034","R-007"],"cells":[{"x":23,"y":14},{"x":24,"y":14},{"x":24,"y":15}],"resolution":"yield","yieldRobotId":"R-007","yieldToX":24,"yieldToY":16,"searchedDistance":5,"resolvedMs":1200}""";
+        """{"cycle":["R-012","R-034","R-007"],"cells":[{"x":23,"y":14},{"x":24,"y":14},{"x":24,"y":15}],"resolution":"yield","yieldRobotId":"R-007","yieldToX":24,"yieldToY":16,"searchedDistance":5,"noYieldRetries":0,"resolvedMs":1200}""";
 
     [Fact] // DL-11
     public void YieldExample_RoundTrips_ToSameBytes_WithSearchedDistance()
@@ -26,7 +26,7 @@ public class DeadlockPayloadJsonTests
     public void Payload_Serializes_CamelCase_SearchedDistanceBeforeResolvedMs()
     {
         var payload = new DeadlockDetectedPayload(["R-012", "R-034", "R-007"],
-            [new CellDto(23, 14), new CellDto(24, 14), new CellDto(24, 15)], "yield", "R-007", 24, 16, 5, 1200);
+            [new CellDto(23, 14), new CellDto(24, 14), new CellDto(24, 15)], "yield", "R-007", 24, 16, 5, 0, 1200);
 
         var json = Encoding.UTF8.GetString(FleetJson.Serialize(payload));
 
@@ -39,7 +39,7 @@ public class DeadlockPayloadJsonTests
     public void FailedResolution_RoundTrips_WithSearchedDistance()
     {
         var payload = new DeadlockDetectedPayload(["R-001", "R-002"], [new CellDto(5, 5), new CellDto(6, 5)],
-            "failed", "", 0, 0, 8, 0);
+            "failed", "", 0, 0, 8, 2, 0);
 
         var back = FleetJson.Deserialize<DeadlockDetectedPayload>(FleetJson.Serialize(payload));
 

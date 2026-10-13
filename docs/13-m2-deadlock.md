@@ -152,7 +152,7 @@ public static class YieldSearch   // 순수, 테스트
 |---|---|---|
 | 양보 중 로봇의 판정 점수 | **모든 로봇 앞으로**(동점 이전에 "양보 중"을 먼저 거르는 선행 버킷) | 04 우선순위 기본값은 그대로 두고, 양보 이동이 비양보 로봇에 막히지 않게 |
 | 제3의 양보 로봇·정지 로봇에 막히면 | 그 틱 대기 유지 | 억지로 풀면 또 다른 교착 |
-| TTL까지 도달 못 하면 | §5 — TTL 만료 시 failed(resolvedMs=경과) 발행 후 재탐지 | 영원히 매달리지 않게 |
+| TTL까지 도달 못 하면 | §5 — 양보 TTL 만료는 **발행 없이 재시도로 전환**, 다음 시도에서 다른 로봇을 양보시킬 수 있다 | 영원히 매달리지 않게 |
 
 ---
 
@@ -173,37 +173,29 @@ public static class YieldSearch   // 순수, 테스트
 > 양보 로봇은 Resolved 이후 `deadlock_resolve_ttl_ticks`가 지나도 순환 칸이 안 비면 **그냥 원래 목적지로 재계획**한다(막은 칸을
 > 장애물로, §6-a). 이 재계획도 `replan_max_per_task` 상한에 센다 — 영원히 회피 지점에 매달리지 않는다.
 
-### 발행 시점과 누락 경로 (완결성)
+### 에피소드 모델 — 회피 지점이 없어도 실패시키지 않고 재시도 (사용자 결정, 07)
 
-| 경우 | DeadlockDetected 발행 | resolvedMs |
-|---|---|---|
-| `yield` 완료 | Resolved 신호 틱(§5-5) | `(완료틱 − 탐지틱) × tickMs` — 중재기 탐지 틱 기준 |
-| `failed`(회피 지점 없음) | 탐지 틱 즉시 | 0 |
-| `yield` 미완료 **TTL 만료** | 만료 틱에 **failed**로 | 경과 `(만료틱 − 탐지틱) × tickMs` |
-| run 종료 시 진행 중 | `DrainPendingDeadlocks`가 **failed**로 | 경과 |
+**에피소드 = 같은 `cycleKey`의 최초 탐지~종료.** 회피 지점이 없어도 로봇을 Error로 만들거나 작업을 실패시키지 않고 **대기를 유지한 채
+`deadlock_detect_wait_ms`(기본 1000ms) 간격으로 재시도**한다. 이벤트는 **에피소드당 1건, 종료 때** 발행한다.
 
-> **완료 시점 발행만 두면 양보 막힘·TTL 만료·run 종료에서 영원히 미발행**이 되어 conflict_log 누락, 송신 로그에도 없어 Reconcile도 못 잡는다. 그래서 세 누락 경로를 모두 failed로 닫는다.
-
-### 해소 락 — 중재기 상태 단일 출처
+| 종료 사유 | 발행 | resolvedMs | 조건 |
+|---|---|---|---|
+| `yield` | Resolved 때 1건 | 최초 탐지~완료 총 경과 | 양보 로봇이 회피 지점 점유(점유로 감지) |
+| `reroute` | Reroute 때 1건 | 최초 탐지~종료 총 경과 | 순환이 소멸(구성원이 대안 경로로 빠짐) — 소멸이 재시도 간격만큼 지속되면 |
+| `failed` | 드레인 때 1건 | 최초 탐지~종료 총 경과 | run 종료 시 미해소(마지막에 양보 로봇 없으면 `yield_robot_id` NULL) |
 
 | 항목 | 결정 | 근거 |
 |---|---|---|
-| 키·값 | `cycleKey`(robotId 정렬) → `{탐지틱, resolution, yieldRobotId, yieldTo, searchedDistance}` | 04. 시작 로봇 무관하게 수렴 |
-| TTL | `deadlock_resolve_ttl_ticks`(기본 50틱), 락·양보 표시 모두 | 04. 후퇴 5칸×10틱 |
-| 완료 감지·해제 | **중재기가 점유로 직접 감지**(양보 로봇이 회피 지점 점유). Simulator 해제 API 금지 | §8 상태 단일 출처. 두 번 실행·발행 방지 |
-| IsNew 표시 | 새 결정·완료·실패는 `IsNew=true`, 재전송·재사용은 `false` | Simulator가 같은 해소를 두 번 발행·실행하지 않게(08 §4) |
-| failed도 락을 TTL 유지 | 재탐지·이벤트를 **TTL 주기 이하로 묶는다** | 회피 지점 없는 통로에서 매 틱 재탐지·재발행 폭주 방지 |
+| 재시도 간격 | 기존 `deadlock_detect_wait_ms` **재사용**(04 13키 불변) | 새 설정 키를 만들지 않는다 |
+| 회피 지점 없는 시도 | `noYieldRetries + 1`, 에피소드 유지, **무발행** | M9 `no_yield_point` = `noYieldRetries > 0`(03). failed+yield 두 건을 남기면 deadlock_count·해소 시간 평균이 왜곡된다 |
+| 양보 TTL 만료 | 발행 없이 재시도로 전환(에피소드 유지). 다음 시도에서 다른 로봇을 양보시킬 수 있다 | TTL 만료는 "제때 못 끝남"일 뿐 — 종료가 아니다 |
+| 재계획 상한 | **재시도는 세지 않는다.** 실제 양보 경로를 심는 순간만 기존대로 센다(§6) | 재시도가 상한을 소진하면 안 된다 |
+| 완료 감지·해제 | **중재기가 점유로 직접 감지**(양보 로봇이 회피 지점 점유). Simulator 해제 API 금지 | §8 상태 단일 출처 |
+| IsNew 표시 | 종료 발행은 `IsNew=true`, 재전송·재사용은 `false` | Simulator 중복 발행·실행 방지(08 §4) |
+| 장기 미해소 | 작업 실패 시간 상한 없음. 게이지 `fleet_deadlock_unresolved_active{map_id}`·`fleet_deadlock_unresolved_oldest_seconds{map_id}`로 경보(12 등급 B, 새 액션 없음) | 운영 임계로 판단. 맵 설계 문제 신호 |
 
-### failed 이후 동작
-
-| 항목 | 결정 | 근거 |
-|---|---|---|
-| 어느 로봇 실패 | 순환의 **전원** 작업을 `TaskFailed`(reason `deadlock_unresolved`) | 회피 지점이 하나도 없는 순환은 집합이 풀 수 없다. 한 대만 실패시키면 나머지가 실패 신호 없이 영구 정지 |
-| 실패 로봇 상태 | `Waiting → Error`(reason `deadlock_unresolved`, 03 전이표에 이미 있음). `Error → Idle`은 `recovered`(M8)로만 | 03 line 516. Error라 더는 이동 요청 안 함 → 대기 그래프에서 빠져 재탐지 없음 |
-| 이벤트 | 순환당 `DeadlockDetected`(failed) **1건**(탐지 시작 로봇에 귀속), `TaskFailed`는 로봇마다 | 03 이벤트는 로봇 귀속, 교착은 순환 단위 |
-| 락 | failed도 TTL 유지 → 같은 순환 재탐지는 TTL 뒤에만 | 위 폭주 방지. 전원 Error면 간선이 사라져 재탐지 자체가 없다 |
-
-> M2 단일 프로세스라 락 경쟁은 사실상 없다(04: 한 틱 배치는 한 주체). 락을 두는 이유는 **TTL 기반 재탐지·재발행 억제**와 **M4 Redis 락으로 코드가 그대로 이어지게** 함이다.
+> **Reroute 유예.** 양보 진행 중이 아닌데 순환이 이번 틱에 안 보이면 바로 reroute로 닫지 않는다 — 양보 TTL 만료 직후의 과도기를
+> 오인하지 않도록 **재시도 간격만큼 소멸이 지속**될 때만 reroute로 종료한다.
 
 ---
 
@@ -252,17 +244,17 @@ public static class YieldSearch   // 순수, 테스트
 | `src/Shared/Pipeline/StoreMapping.cs` | `ConflictLogChange`에 `short? SearchedDistance`, `ToConflict`가 교착에서 채움(ConflictDetected는 NULL) |
 | `src/Infrastructure.Postgres/PgEventStore.cs` | `conflict_log` INSERT에 `searched_distance`(DDL 001:82에 이미 컬럼) |
 
-### 03 전이·사유 (대부분 이미 있음)
+### 03 전이·사유
 
-| 전이/사유 | 03 현재 | 필요 |
-|---|---|---|
-| `Waiting → Error (deadlock_unresolved)` | **있음**(line 516) | 그대로 |
-| `Moving → Error (replan_exceeded)` | **있음**(line 515) | 그대로 |
-| `Waiting → Moving (yield·replanned)` | **있음**(line 516) | 그대로 |
-| `TaskFailed.reason` `deadlock_unresolved` | **있음**(line 369) | 그대로 |
-| `TaskFailed.reason` `replan_exceeded` | **없음** | **추가**(§9) |
+| 전이/사유 | 처리 |
+|---|---|
+| `Waiting → Error (deadlock_unresolved)` | **제거**(교착은 작업을 실패시키지 않는다 — 에피소드 재시도). 전이표 25→24 |
+| `TaskFailed.reason` `deadlock_unresolved` | **제거** |
+| `Moving → Error (replan_exceeded)` · `Waiting → Error (replan_exceeded)` | 유지(재계획 상한 초과는 실패) |
+| `Waiting → Moving (yield·replanned)` | 유지 |
+| `DeadlockDetected` | `resolution`에 `reroute` 추가, `noYieldRetries` 추가, **에피소드 종료 때 1건** 발행 명시 |
 
-> 재계획 상한 초과 사유를 03 상태표의 기존 토큰 **`replan_exceeded`**로 통일한다(총괄이 쓴 `replan_exhausted` 대신 — 03 line 515가 이미 `replan_exceeded`라 토큰 중복을 피한다). `deadlock_unresolved`는 이미 TaskFailed·전이표 양쪽에 있어 추가 없음.
+> 재계획 상한 초과 사유는 03 기존 토큰 **`replan_exceeded`**로 통일. `deadlock_unresolved`는 이번에 **삭제**한다(교착 실패 모델 폐기).
 
 ---
 
@@ -311,14 +303,20 @@ public sealed record DeadlockOptions   // 04 설정값 9~13
 | 해소 호출 | (초안) 별도 `ResolveDeadlocksAsync` | **폐기, `DecideAsync` 판정 안**. `MoveDecision.Deadlock` 필드 | 08 §4 재전송 멱등·M4 왕복 — 판정 응답에 실려야 기록·재사용된다 |
 | 회피 지점 조건 | 04 "다른 로봇 계획 경로가 아님" | **점유·예약 칸으로 판정(M2·M4 동일)**, `RemainingPath` 제거 | M2 전용 검사는 M4 제품에 없는 동작을 만든다. 04에 해석 주석만 |
 | BFS 확장 | (초안) 목표 칸 조건만 | **경로 칸도 미점유**(시작 칸만 예외) | 중간이 막히면 양보 로봇이 못 간다 |
-| DeadlockDetected 발행 | 03 미규정 | yield=완료, failed=탐지, **TTL 만료·run 종료=failed(경과)** | 누락 경로 차단(conflict_log·Reconcile) |
-| failed 이후 | (초안) 미정 | 순환 **전원** TaskFailed(deadlock_unresolved)·Waiting→Error, 락 TTL 유지 | 한 대만 실패시키면 나머지 영구 정지 |
-| 재계획 vs 교착 | (초안) 미정 | 대안 없으면 재계획 안 침, 대기 유지→교착 탐지. deadlock 재계획도 상한 포함 | 정면 대치가 교착 전에 실패하지 않게 |
-| `DeadlockDetectedPayload` | 03 JSON에 `searchedDistance` 있음 | **코드 record에 필드 추가** | 03과 코드 일치 |
-| `searched_distance` 적재 | 01 DDL에 컬럼 있음 | 매핑·INSERT 연결 | 비어 있던 경로 |
-| `TaskFailed.reason` | 03에 `replan_exceeded` 없음 | **03 TaskFailed 목록에 `replan_exceeded` 추가**(값 불변, 기존 전이표 토큰과 통일) | §7 |
+| DeadlockDetected 발행 | 03 미규정 | **에피소드당 1건, 종료 때**(yield / reroute / failed), resolvedMs=총 경과 | 사용자 결정(§5). failed+yield 두 건 금지 |
+| 해소 실패 | (사용자 결정 전) 작업 실패·Error | **실패 안 함 — 대기 유지 + 재시도**, 장기 미해소는 경보 | 07 e79cb0a |
+| 재계획 vs 교착 | (초안) 미정 | 막은 칸 장애물 주입 우회, 없으면 대기→교착. deadlock 양보도 상한 포함(재시도는 미포함) | 정면 대치가 교착 전에 실패하지 않게 |
+| `DeadlockDetectedPayload` | 03 JSON에 `searchedDistance` 있음 | `SearchedDistance`·**`NoYieldRetries`** 필드 추가 | 03·M9 판정 |
+| `searched_distance`·`no_yield_retries` 적재 | DDL에 컬럼 없음 | 매핑·INSERT·**001·01 DDL 제자리 추가** | 실서버 미적용이라 제자리 수정 |
+| 03 전이·사유 | — | `Waiting→Error(deadlock_unresolved)`·`TaskFailed deadlock_unresolved` **제거**, `replan_exceeded` 유지, `DeadlockDetected`에 reroute·noYieldRetries | §7 |
 
-> 03은 `replan_exceeded`를 TaskFailed 사유에 더하는 **한 줄**만 바뀐다(전이·`deadlock_unresolved`는 이미 있음). 04·01 문서·기본값·안전성 불변식은 바꾸지 않는다. 위 구현 판단들이 리뷰 대상이다.
+### 사용자 결정 — 실패 대신 재시도 (07 결정 로그 e79cb0a)
+
+> 회피 지점이 없어 교착 해소에 실패해도 **로봇을 Error로 만들거나 작업을 실패시키지 않고 매 초 재시도**한다. 13 §5 "failed 이후
+> 순환 전원 TaskFailed + Waiting→Error"를 **에피소드 모델**(§5)로 대체. 이벤트는 에피소드당 1건(종료 때: yield / reroute / failed),
+> `resolvedMs`는 최초 탐지부터 총 경과. 03에서 `Waiting→Error(deadlock_unresolved)` 전이와 `TaskFailed.reason deadlock_unresolved`를
+> 제거(전이표 25→24), `DeadlockDetectedPayload.NoYieldRetries`·`conflict_log.no_yield_retries` 추가(001 제자리 수정), M9 판정은
+> `noYieldRetries > 0`. 장기 미해소는 게이지 2개로 경보(12 등급 B), 재시도 간격은 `deadlock_detect_wait_ms` 재사용(04 13키 불변).
 
 ### 구현 중 확정한 세부(2단계, 총괄 리뷰)
 
@@ -327,10 +325,10 @@ public sealed record DeadlockOptions   // 04 설정값 9~13
 | 탐지 임계 | 순환의 **모든** 로봇이 임계 이상(초안 "하나 이상"에서 좁힘) | 진짜 교착은 동시 상호 차단. 한 대만 오래 기다린 과도기 순환을 잡으면 혼합 상태(Moving·Waiting)가 섞여 잘못된 전이가 난다 |
 | §6a 재계획 | **막은 다음 칸을 planner 장애물로 주입**해 우회를 찾는다. 피하는 경로가 없으면 NoAlternative(대기 → 교착) | `IPathPlanner.FindPath`에 선택 `blocked` 추가. planner는 점유를 모르므로 장애물 주입 없이는 같은 직선 경로만 나와 우회가 안 된다 |
 | 양보 실행 | 회피 지점을 **경유**하는 결합 경로(현재→포켓→목적지)를 통째로 심는다. 포켓에서 멈추지 않고 waypoint로 지난다 | 상태 머신을 어지럽히지 않는다(포켓에서 Loading 오인 방지). 다른 로봇이 지나갈 때까지 포켓 다음 칸에서 자연히 대기 |
-| 혼합 상태 방어 | 양보·실패는 **`Reported == Waiting`인 로봇에만** 상태 전이. 이미 Moving이면 경로만 바꾸고 실패 대상에서 뺀다 | 03 전이표 밖(Moving→Error deadlock_unresolved 등) 전이를 내지 않는다 |
-| 03 추가 | `Waiting → Error (replan_exceeded)` 전이 1개 추가(전이표 25개) | M2는 재계획 상한을 **대기 중** 소진한다(기존 `replan_exceeded`는 Moving→Error만) |
-| payload 타입 | `DeadlockDetectedPayload.YieldRobotId`는 **non-null `string`**(빈 값), `YieldToX/Y`는 `int` 유지 | `StoreMapping`이 빈 값·0을 NULL로 정규화(P1-2)해 DB·M9 판정이 동일. `string?`로 안 바꿔 해소기·직렬화 단순 |
-| TTL 만료 failed 처리 | TTL 만료 failed(`YieldRobotId != null`)는 **이벤트만** 발행하고 양보 로봇의 `Yielding`을 풀어 재계획으로 복귀시킨다. **작업을 실패시키지 않는다**(`FailCycle`은 회피 지점 없음 = `YieldRobotId == null`일 때만) | TTL 만료는 "양보가 제때 못 끝남"일 뿐 순환의 다른 로봇은 정상이다. 전원 실패는 집합이 애초에 풀 수 없을 때만 |
+| 양보 상태 전이 | 양보는 **`Reported == Waiting`인 로봇만** Waiting→Moving(yield). 이미 Moving이면 경로만 바꾼다 | 03 전이표 밖 전이를 내지 않는다 |
+| 03 전이표 | `Waiting→Error(replan_exceeded)` 유지, `deadlock_unresolved` 전이 **제거** → 전이표 **24개** | M2 재계획 상한은 대기 중 소진(실패). 교착은 실패시키지 않는다 |
+| payload 타입 | `DeadlockDetectedPayload.YieldRobotId`는 **non-null `string`**(빈 값), `YieldToX/Y`는 `int` 유지 | `StoreMapping`이 빈 값·0을 NULL로 정규화(P1-2)해 DB·M9 판정이 동일 |
+| 양보 TTL 만료 | **발행 없이 재시도로 전환**(에피소드 유지), 양보 로봇 `Yielding` 해제해 복귀. 작업 미실패 | TTL 만료는 "제때 못 끝남"일 뿐 — 종료 아님(§5) |
 | 대안 재계획 반복 종료 | 한 구성원이 대안 재계획에 계속 성공해 `WaitMs`가 0으로 돌아가면 교착으로 안 잡히고(대기가 임계에 못 미침), 재계획 횟수가 `replan_max_per_task`를 넘으면 `replan_exceeded`로 **유한 종료** | 과도기 반복이 무한 루프가 되지 않는다. deadlock 사유 양보도 같은 상한에 센다(§6·§7) |
 | `_drained` 수명 | 드레인 멱등 캐시는 run 단위다. **M4 run 전환(02 run 관리 4단계: 맵 해시 초기화·epoch 증가)에서 해소기 상태(락·양보 표시·드레인 캐시)를 함께 초기화**한다 | run이 바뀌면 이전 교착 상태가 남으면 안 된다(04 run 전환 불변식) |
 | M4 요청 계약 | §6a 재계획의 **막힌 칸 목록을 M4 `/paths/batch` 요청 계약에 포함**한다(지금은 `IPathPlanner.FindPath(blocked)` 인자) | M4에서 계획을 HTTP로 분리해도 장애물 주입이 이어지게 |
@@ -350,17 +348,18 @@ public sealed record DeadlockOptions   // 04 설정값 9~13
 | DL-02 | 결정성 | 같은 입력 → 같은 순환·양보·회피 지점(요청 순서 섞어도 동일) |
 | DL-03 | 양보 비용 | 비용 최소, 동점 robotId, 우선순위 0 분모 방지 |
 | DL-04 | `YieldSearch.Find` | 최근접 유효 칸, **경로 칸 미점유**, 점유·예약 제외, 상한 초과 → 확대 → 없음(failed, searched=상한) |
-| DL-05 | 해소 락 | 같은 cycleKey 재탐지 시 저장 결정(IsNew=false), 양보 표시 로봇 낀 순환 건너뜀, TTL 만료 후 재해소, failed도 TTL 유지 |
-| DL-06 | `DeadlockOptions.Validate` | TTL ≥ 거리×10, 위반 예외 |
-| DL-07 | 해소 E2E(회피 포켓 통로) | 정면 대치 **해소**: 양보 로봇 우회→양쪽 완료, DeadlockDetected(yield, searchedDistance, resolvedMs>0, 1회), PathReplanned(deadlock) |
-| DL-08 | 해소 실패(1칸 막다른 통로 `1111`) | 회피 지점 없음 → **순환 전원** TaskFailed(deadlock_unresolved)·Waiting→Error, DeadlockDetected(failed, searched=상한, resolvedMs=0, 1회) |
-| DL-09 | 핑퐁·기아 없음(3대 행렬 대 1대) | 유한 틱 내 모두 종료 또는 상한 초과 실패. 같은 로봇이 무한 양보하지 않음(deadlock 재계획 상한 포함) |
-| DL-10 | 재계획 순서 | 대안 있으면 PathReplanned(blocked)·쿨다운 억제·상한 초과 TaskFailed(replan_exceeded); **정면 대치는 replan_exceeded가 아니라 교착 해소로 간다**(대안 없어 재계획 미계산→1000ms 교착) |
-| DL-11 | 이벤트 | Deadlock·Replan 배치 순서(rank 0), DeadlockDetected JSON 왕복에 searchedDistance, IsNew로 중복 발행 없음 |
-| DL-12 | 적재 매핑 | `StoreMapping.ToConflict`가 searched_distance 채움(교착), ConflictDetected는 NULL |
-| **교체** | 기존 `HeadOn_InCorridor_BothStayWaiting` | 삭제 → DL-07(해소)·DL-08(실패)로 대체 |
+| DL-05 | 에피소드 재시도·종료 | 같은 cycleKey 재탐지 시 재결정 안 함, **회피 지점 없으면 발행 없이 재시도(UnresolvedCount)·드레인에서만 failed(noYieldRetries>0)**, **양보 TTL 만료는 발행 없이 재시도로 전환**, 포켓이 비면 같은 에피소드가 yield로 1건(resolvedMs=총 경과), **순환 소멸 유예 뒤 reroute**, 드레인 멱등 |
+| DL-06 | `DeadlockOptions.Validate` | TTL ≥ 거리×10, **04 허용 범위**, 위반 예외 |
+| DL-07 | 해소 E2E(회피 포켓 통로) | 정면 대치 **해소**: 양보 로봇 우회→양쪽 완료, DeadlockDetected(yield, 1회), PathReplanned(deadlock) |
+| DL-08 | 회피 지점 없음(막다른 통로) | **실패 아님** — 작업 미실패·로봇 Error 아님·**대기 유지**, run 중 DeadlockDetected 없음, 종료 드레인에서 failed **1건**(noYieldRetries>0) |
+| DL-09 | 핑퐁·기아 없음(3대 행렬 대 1대) | 유한 틱 내 전원 끝 상태(Completed/Failed)·대기 로봇 0, 같은 로봇 무한 양보 없음(상한) |
+| DL-10 | 재계획 순서 | 대안 있으면 PathReplanned(blocked)·교착 아님; **정면 대치는 대안 없어 교착으로** |
+| DL-11 | 이벤트 | Deadlock·Replan 배치 순서(rank 0), DeadlockDetected JSON 왕복(searchedDistance·noYieldRetries), IsNew로 중복 발행 없음 |
+| DL-12 | 적재 매핑 | `ToConflict`가 searched_distance·no_yield_retries 채움(교착), ConflictDetected는 NULL |
+| DL-ttl | TTL 만료 재시도 E2E | 포켓 거리3·TTL30(04 범위), TTL 만료는 무발행 재시도 → 에피소드당 1건으로 결국 완료 |
+| **삭제** | 기존 `HeadOn_InCorridor_BothStayWaiting` | DL-07·08로 대체 |
 
-통합(실서버, skip): C-03 계약에 교착 적재 1건(searched_distance 왕복) 추가 — 접속 정보 있을 때.
+통합(실서버, skip): C-03 계약에 교착 적재 1건(searched_distance·no_yield_retries 왕복) 추가 — 접속 정보 있을 때.
 
 ---
 

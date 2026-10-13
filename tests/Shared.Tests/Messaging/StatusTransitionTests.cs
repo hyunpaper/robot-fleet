@@ -9,8 +9,8 @@ public class StatusTransitionTests
     [Fact]
     public void All_ContainsEveryCellOfTheTable()
     {
-        StatusTransitions.All.Should().HaveCount(25);
-        StatusTransitions.All.Distinct().Should().HaveCount(25);
+        StatusTransitions.All.Should().HaveCount(24);
+        StatusTransitions.All.Distinct().Should().HaveCount(24);
     }
 
     [Fact]

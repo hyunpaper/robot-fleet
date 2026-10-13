@@ -9,7 +9,7 @@ namespace RobotFleet.Simulator.Tests;
 public class EventCollectorDeadlockTests
 {
     private static DeadlockDetectedPayload Dead() =>
-        new(["R-01", "R-02"], [new CellDto(3, 4), new CellDto(4, 4)], "yield", "R-02", 5, 4, 3, 0);
+        new(["R-01", "R-02"], [new CellDto(3, 4), new CellDto(4, 4)], "yield", "R-02", 5, 4, 3, 0, 0);
 
     private static PathReplannedPayload Replanned(string robot) => new(robot, "T-1", "blocked", 8, 10, 0.5);
 

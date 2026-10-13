@@ -136,6 +136,13 @@ public sealed class InMemoryMoveArbiter : IMoveArbiter
             return _resolver?.DrainPending(tick) ?? Array.Empty<DeadlockInfo>();
     }
 
+    /// 장기 미해소 교착 수 · 가장 오래된 것의 경과 ms(메트릭, 13 §5)
+    public (int Active, int OldestMs) UnresolvedDeadlocks(long tick)
+    {
+        lock (_gate)
+            return _resolver is null ? (0, 0) : (_resolver.UnresolvedCount, _resolver.OldestUnresolvedMs(tick));
+    }
+
     private static MoveDecision Decide(MapState map, MoveRequest r, IReadOnlyList<MoveRequest> all, ReadOnlySpan<int> ahead)
     {
         var robot = map.Robots.TryGetValue(r.RobotId, out var known) ? known : map.Register(r.RobotId, r.From);

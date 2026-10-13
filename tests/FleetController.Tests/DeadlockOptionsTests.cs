@@ -39,4 +39,24 @@ public class DeadlockOptionsTests
 
         act.Should().Throw<ArgumentException>().WithMessage("*deadlock_resolve_ttl_ticks*");
     }
+
+    [Theory] // DL-06 — 04 허용 범위
+    [InlineData(nameof(DeadlockOptions.DeadlockDetectWaitMs))]
+    [InlineData(nameof(DeadlockOptions.YieldSearchMaxDistance))]
+    [InlineData(nameof(DeadlockOptions.YieldDistanceWeight))]
+    [InlineData(nameof(DeadlockOptions.DeadlockResolveTtlTicks))]
+    public void Validate_OutOfAllowedRange_Throws(string which)
+    {
+        var options = which switch
+        {
+            nameof(DeadlockOptions.DeadlockDetectWaitMs) => new DeadlockOptions { DeadlockDetectWaitMs = 100 },      // < 500
+            nameof(DeadlockOptions.YieldSearchMaxDistance) => new DeadlockOptions { YieldSearchMaxDistance = 20, DeadlockResolveTtlTicks = 120 },   // > 15
+            nameof(DeadlockOptions.YieldDistanceWeight) => new DeadlockOptions { YieldDistanceWeight = 5.0 },        // > 3.0
+            _ => new DeadlockOptions { DeadlockResolveTtlTicks = 200 },                                              // > 120
+        };
+
+        var act = () => options.Validate();
+
+        act.Should().Throw<ArgumentException>().WithMessage("*범위*");
+    }
 }

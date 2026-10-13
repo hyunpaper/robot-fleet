@@ -156,8 +156,10 @@ public class MultiRobotTests
         }
 
         var events = new List<EventItem>();
+        long last = 0;
         for (long tick = 1; tick <= maxTicks; tick++)
         {
+            last = tick;
             collector.Begin(tick, DateTimeOffset.UnixEpoch.AddMilliseconds(tick * options.TickMs));
             if (tick == 1)
                 for (var i = 0; i < robots.Count; i++) lifecycle.Assign(robots[i], tasks[i], tick);
@@ -168,6 +170,11 @@ public class MultiRobotTests
             foreach (var b in collector.Complete(robots.Select(lifecycle.TelemetryOf))) events.AddRange(b.Events);
             if (tasks.All(t => t.Status is TaskStatus.Completed or TaskStatus.Failed)) break;
         }
+
+        // run 종료 드레인(FleetSimulation 종료 경로와 동일): 미해소 교착을 failed로 발행
+        collector.Begin(last + 1, DateTimeOffset.UnixEpoch.AddMilliseconds((last + 1) * options.TickMs));
+        lifecycle.FlushDeadlocks(arbiter.DrainPendingDeadlocks(map.MapId, last));
+        foreach (var b in collector.Complete(Array.Empty<RobotTelemetryPayload>())) events.AddRange(b.Events);
 
         return (tasks, robots, events);
     }
@@ -195,22 +202,24 @@ public class MultiRobotTests
     }
 
     [Fact]
-    public async Task DL08_HeadOn_DeadEndCorridor_ResolutionFails()
+    public async Task DL08_HeadOn_DeadEndCorridor_NoFailure_RetriesThenDrainFailed()
     {
-        // 회피 지점이 없는 1칸 통로
-        var (tasks, robots, events) = await RunDeadlock(TestMaps.DeadEndCorridor(), 500,
+        // 회피 지점이 없는 1칸 통로 — 작업을 실패시키지 않고 대기 유지 + 재시도. 종료 드레인에서만 failed 1건(사용자 결정)
+        var (tasks, robots, events) = await RunDeadlock(TestMaps.DeadEndCorridor(), 80,
             ("R-001", new(1, 0), Heading.East, new(3, 0)),
             ("R-002", new(2, 0), Heading.West, new(0, 0)));
 
-        tasks.Should().OnlyContain(t => t.Status == TaskStatus.Failed);
-        robots.Should().OnlyContain(r => r.Status == RobotStatus.Error);
+        tasks.Should().OnlyContain(t => t.Status != TaskStatus.Failed, "작업을 실패시키지 않는다");
+        robots.Should().OnlyContain(r => r.Status != RobotStatus.Error, "로봇을 Error로 만들지 않는다");
+        robots.Should().Contain(r => r.Status == RobotStatus.Waiting, "대기를 유지한다");
+        events.Should().NotContain(e => e.EventType == EventType.TaskFailed
+                                        && StoreMapping.Read<TaskFailedPayload>(e.Payload).Reason == "deadlock_unresolved");
+
+        // 에피소드당 1건, 종료 드레인에서 failed (noYieldRetries > 0 = 회피 지점 없이 재시도했다)
         var deadlocks = Deadlocks(events);
         deadlocks.Should().ContainSingle();
         deadlocks[0].Resolution.Should().Be("failed");
-        deadlocks[0].ResolvedMs.Should().Be(0);
-        deadlocks[0].SearchedDistance.Should().Be(new DeadlockOptions().YieldSearchMaxDistance + 2);
-        events.Count(e => e.EventType == EventType.TaskFailed
-                          && StoreMapping.Read<TaskFailedPayload>(e.Payload).Reason == "deadlock_unresolved").Should().Be(2);
+        deadlocks[0].NoYieldRetries.Should().BeGreaterThan(0);
     }
 
     [Fact]
@@ -250,20 +259,21 @@ public class MultiRobotTests
     }
 
     [Fact]
-    public async Task DL_TtlExpiry_EmitsFailedButDoesNotFailTasks()
+    public async Task DL_TtlExpiry_NoEmitDuringRun_RetriesAndResolves()
     {
-        // 포켓은 가깝지만 TTL을 짧게 둬 양보가 회전 지연으로 제때 못 끝나게 한다. TTL 만료 failed(양보 로봇 있음)는
-        // 정상 로봇 작업을 실패시키지 않고(13 §5), 양보 로봇은 재계획으로 복귀해 결국 완료된다
-        var opts = new DeadlockOptions { YieldSearchMaxDistance = 1, DeadlockResolveTtlTicks = 10 };
-        var (tasks, _, events) = await RunDeadlock(TestMaps.Unchecked("11111", "00100"), 500, opts,
-            ("R-001", new(1, 0), Heading.East, new(4, 0)),
-            ("R-002", new(2, 0), Heading.West, new(0, 0)));
+        // 포켓이 거리 3, TTL 30(04 범위 안)이라 양보가 회전 지연으로 TTL을 넘길 수 있다. TTL 만료는 발행 없이 재시도로 전환 —
+        // 에피소드가 열린 채 다음 시도로 이어지고, 결국 양보로 해소되거나(yield) 대안으로 빠진다(reroute). 중복 failed 발행 없음
+        var opts = new DeadlockOptions { YieldSearchMaxDistance = 3, DeadlockResolveTtlTicks = 30 };
+        var (tasks, _, events) = await RunDeadlock(TestMaps.Unchecked("1111111", "0001000"), 500, opts,
+            ("R-001", new(2, 0), Heading.East, new(6, 0)),
+            ("R-002", new(3, 0), Heading.West, new(0, 0)));
 
-        var deadlocks = Deadlocks(events);
-        deadlocks.Should().Contain(d => d.Resolution == "failed" && d.YieldRobotId != "", "TTL 만료 failed는 양보 로봇을 싣는다");
         events.Should().NotContain(e => e.EventType == EventType.TaskFailed
-            && StoreMapping.Read<TaskFailedPayload>(e.Payload).Reason == "deadlock_unresolved", "정상 로봇을 실패시키지 않는다");
-        tasks.Should().OnlyContain(t => t.Status == TaskStatus.Completed, "양보 로봇이 복귀해 둘 다 완료");
+            && StoreMapping.Read<TaskFailedPayload>(e.Payload).Reason == "deadlock_unresolved", "작업을 실패시키지 않는다");
+        // 에피소드당 1건만 — failed+yield 두 건으로 남기지 않는다
+        var deadlocks = Deadlocks(events);
+        deadlocks.GroupBy(d => d.Cycle[0]).Should().OnlyContain(g => g.Count() == 1, "에피소드당 1건");
+        tasks.Should().OnlyContain(t => t.Status == TaskStatus.Completed, "결국 해소되어 둘 다 완료");
     }
 
     [Fact]
@@ -275,7 +285,7 @@ public class MultiRobotTests
         collector.Begin(1, DateTimeOffset.UnixEpoch);
 
         var reused = new DeadlockInfo(new[] { "R-001", "R-002" }, new[] { new Point(1, 0), new Point(2, 0) },
-            "failed", null, null, 7, 1, 0, DeadlockPhase.Failed, IsNew: false);
+            "failed", null, null, 7, 1, 0, DeadlockPhase.Failed, IsNew: false, NoYieldRetries: 1);
         lifecycle.OnDeadlock(reused, 5).Should().BeEmpty();
 
         collector.Complete(Array.Empty<RobotTelemetryPayload>())

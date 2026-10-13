@@ -24,7 +24,6 @@ public static class StatusTransitions
         (Waiting, Moving, "path_cleared"),
         (Waiting, Moving, "replanned"),
         (Waiting, Moving, "yield"),
-        (Waiting, Error, "deadlock_unresolved"),
         (Waiting, Error, "replan_exceeded"),   // 막혀 대기 중 재계획 상한 초과(13 §6). M2는 Waiting에서 소진된다
         (Waiting, Error, "fault"),
 

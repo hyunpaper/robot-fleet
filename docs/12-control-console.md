@@ -107,7 +107,7 @@ API · 스키마 상세는 중간관리, 시안 · 구성도는 하위 작업이
 | 항목 | 결정 |
 |---|---|
 | 역할 | 사건을 사실로 정리하고, 허용 액션 후보를 제시한다. **후보는 규칙이 정하고 LLM은 설명만 붙인다.** LLM이 꺼져 있어도 규칙 후보는 뜬다 |
-| 사건 원천 | Prometheus(큐 적체, `fleet_dlq_depth`, 워커 정지, DB 재시도, 이벤트 지연, pod 재시작), k8s API 읽기(pod · HPA), Reconcile 보고서, Sentinel 승격 · RabbitMQ 리더 변경 기록 |
+| 사건 원천 | Prometheus(큐 적체, `fleet_dlq_depth`, 워커 정지, DB 재시도, 이벤트 지연, pod 재시작, **장기 미해소 교착 `fleet_deadlock_unresolved_active`·`fleet_deadlock_unresolved_oldest_seconds`** — 맵 설계 문제 신호, 등급 B·새 액션 없음), k8s API 읽기(pod · HPA), Reconcile 보고서, Sentinel 승격 · RabbitMQ 리더 변경 기록 |
 | 주기 | 열린 사건이 있을 때만 동작. 야간 배치가 아니다 |
 | 실행 위치 | 규칙 · 실행은 ControlApi. LLM 설명은 집 PC(교착 에이전트와 같은 호스트) |
 
