@@ -71,9 +71,13 @@ public static class StoreMapping
         {
             var d = Read<DeadlockDetectedPayload>(row.Payload);
             var first = d.Cells.Count > 0 ? d.Cells[0] : null;
+            // 양보가 있을 때만 yield_robot_id · yield_to_x/y를 싣는다. 양보 없는 교착(resolution=failed 등)은
+            // YieldToX/Y가 0으로 와도 좌표가 아니라 "없음"이므로 NULL로 저장한다(안 그러면 (0,0)으로 잘못 남는다)
+            var hasYield = !string.IsNullOrEmpty(d.YieldRobotId);
             return new ConflictLogChange(row.EventId, row.RunId, row.MapId, row.Tick, 3, (short?)first?.X, (short?)first?.Y,
                 d.Cycle, ResolutionCode(d.Resolution), null, d.ResolvedMs,
-                string.IsNullOrEmpty(d.YieldRobotId) ? null : d.YieldRobotId, (short)d.YieldToX, (short)d.YieldToY, row.OccurredAt);
+                hasYield ? d.YieldRobotId : null, hasYield ? (short)d.YieldToX : null, hasYield ? (short)d.YieldToY : null,
+                row.OccurredAt);
         }
 
         var c = Read<ConflictDetectedPayload>(row.Payload);
