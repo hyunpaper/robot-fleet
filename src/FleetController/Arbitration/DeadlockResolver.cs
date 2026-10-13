@@ -20,6 +20,10 @@ public sealed class DeadlockResolver
 
     public DeadlockOptions Options => _options;
 
+    /// 지금 양보 이동 중인 로봇인가(판정 점수 선행 버킷용, 13 §4 · §6)
+    public bool IsYielding(string robotId) =>
+        _locks.Values.Any(l => l.YieldInProgress && string.Equals(l.YieldRobotId, robotId, StringComparison.Ordinal));
+
     /// 이번 틱 거부에서 순환을 찾아 새 순환마다 양보/실패를 결정한다. 이미 락이 있는 순환은 재결정하지 않는다(13 §3 · §5)
     public IReadOnlyList<DeadlockInfo> Resolve(
         long tick,
