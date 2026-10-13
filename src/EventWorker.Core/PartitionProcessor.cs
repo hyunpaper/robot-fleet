@@ -123,24 +123,7 @@ internal sealed class PartitionProcessor
     private async Task ProcessAsync(List<Delivery> batch, CancellationToken ct)
     {
         var started = _time.GetTimestamp();
-        var backoff = _options.DbRetryMin;
-        BatchOutcome outcome;
-        while (true)
-        {
-            try
-            {
-                outcome = await _handlers.HandleAsync(batch, ct);
-                break;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                // ack도 nack도 하지 않는다 — 전달 횟수를 올리지 않고 같은 배치를 다시 (08 §8)
-                WorkerMetrics.DbRetry.Inc();
-                _logger.LogWarning(ex, "{Queue} 배치 {Count}건 저장 실패, {Delay}ms 후 재시도", Queue, batch.Count, backoff.TotalMilliseconds);
-                await Task.Delay(backoff, _time, ct);
-                backoff = TimeSpan.FromTicks(Math.Min(backoff.Ticks * 2, _options.DbRetryMax.Ticks));
-            }
-        }
+        var outcome = await HandleWithIsolationAsync(batch, ct);
 
         // 커밋이 끝난 뒤에만 브로커에 알린다. 독 메시지는 개별 reject, 나머지는 마지막 tag까지 한 번에 ack
         var subscription = _subscription!;
@@ -153,4 +136,50 @@ internal sealed class PartitionProcessor
         Acked += batch.Count;
         WorkerMetrics.BatchSeconds.Observe(_time.GetElapsedTime(started).TotalSeconds);
     }
+
+    /// 일시 오류: 같은 (하위)배치를 백오프로 무한 재시도(전달 횟수 보존, 08 §8).
+    /// 결정적 오류(데이터 · 제약 · 문법): 배치를 절반씩 나눠 원인을 1건까지 좁힌 뒤 그 메시지만 DLQ로 보내고,
+    /// 나머지는 정상 적재한다. 커밋 전에 던진 결정적 예외라 트랜잭션은 롤백돼 있어 분할 재처리가 안전하다(멱등). 10 §6
+    private async Task<BatchOutcome> HandleWithIsolationAsync(IReadOnlyList<Delivery> batch, CancellationToken ct)
+    {
+        var backoff = _options.DbRetryMin;
+        while (true)
+        {
+            try
+            {
+                return await _handlers.HandleAsync(batch, ct);
+            }
+            catch (DeterministicStoreException ex) when (!ct.IsCancellationRequested)
+            {
+                if (batch.Count <= 1)
+                {
+                    WorkerMetrics.DeterministicDlq.Inc(batch.Count);
+                    _logger.LogError(ex, "{Queue} 결정적 저장 오류 {SqlState} — 메시지 {MessageId} 1건 DLQ",
+                        Queue, ex.SqlState, batch.Count == 1 ? batch[0].MessageId : "(빈 배치)");
+                    return batch.Count == 1
+                        ? new BatchOutcome(new[] { batch[0].DeliveryTag }, 0, 0, 0)
+                        : new BatchOutcome(Array.Empty<ulong>(), 0, 0, 0);
+                }
+
+                _logger.LogWarning(ex, "{Queue} 결정적 저장 오류 {SqlState} — 배치 {Count}건 분할 재시도",
+                    Queue, ex.SqlState, batch.Count);
+                var mid = batch.Count / 2;
+                var left = await HandleWithIsolationAsync(batch.Take(mid).ToList(), ct);
+                var right = await HandleWithIsolationAsync(batch.Skip(mid).ToList(), ct);
+                return Merge(left, right);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && !ct.IsCancellationRequested)
+            {
+                // ack도 nack도 하지 않는다 — 전달 횟수를 올리지 않고 같은 배치를 다시 (08 §8)
+                WorkerMetrics.DbRetry.Inc();
+                _logger.LogWarning(ex, "{Queue} 배치 {Count}건 저장 실패, {Delay}ms 후 재시도", Queue, batch.Count, backoff.TotalMilliseconds);
+                await Task.Delay(backoff, _time, ct);
+                backoff = TimeSpan.FromTicks(Math.Min(backoff.Ticks * 2, _options.DbRetryMax.Ticks));
+            }
+        }
+    }
+
+    private static BatchOutcome Merge(BatchOutcome a, BatchOutcome b) => new(
+        a.Poison.Concat(b.Poison).ToList(),
+        a.Stored + b.Stored, a.Duplicate + b.Duplicate, a.Invalid + b.Invalid);
 }

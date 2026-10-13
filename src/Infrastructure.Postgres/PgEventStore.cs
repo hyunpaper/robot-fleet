@@ -22,6 +22,20 @@ public sealed class PgEventStore : IEventStore
 
     public async Task<StoreResult> StoreBatchAsync(StoreBatch batch, CancellationToken ct)
     {
+        try
+        {
+            return await StoreBatchCoreAsync(batch, ct);
+        }
+        catch (PostgresException pg) when (DbErrorClass.IsDeterministicSqlState(pg.SqlState))
+        {
+            // 데이터 · 제약 · 문법 오류는 재시도해도 같다 → 결정적 예외로 올려 처리기가 DLQ로 보낸다(10 §6).
+            // 트랜잭션은 예외로 롤백됐으므로 이 배치는 아무것도 쓰지 않은 상태다
+            throw new DeterministicStoreException($"결정적 저장 오류 {pg.SqlState}: {pg.MessageText}", pg.SqlState, pg);
+        }
+    }
+
+    private async Task<StoreResult> StoreBatchCoreAsync(StoreBatch batch, CancellationToken ct)
+    {
         // 해석은 트랜잭션 전에(실패하면 아무것도 쓰지 않는다)
         var histories = batch.TaskEvents.ToDictionary(e => e.EventId, StoreMapping.ToHistory);
         var conflicts = batch.Conflicts.Select(StoreMapping.ToConflict).ToList();
