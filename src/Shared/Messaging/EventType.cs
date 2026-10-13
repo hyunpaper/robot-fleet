@@ -13,9 +13,13 @@ public static class EventType
     public const string PathReplanned = "PathReplanned";
     public const string RobotStatusChanged = "RobotStatusChanged";
 
+    public const string SimulationStarted = "SimulationStarted";
+    public const string SimulationEnded = "SimulationEnded";
+
     public static IReadOnlySet<string> All { get; } = new HashSet<string>
     {
         RobotTelemetry, TaskCreated, TaskAssigned, TaskStarted, TaskCompleted, TaskFailed,
         ConflictDetected, DeadlockDetected, PathReplanned, RobotStatusChanged,
+        SimulationStarted, SimulationEnded,
     };
 }

@@ -23,6 +23,9 @@ public sealed record FleetOptions
     public int TurnMsPer90 { get; init; } = 300;
 
     public long MaxTicks { get; init; } = 100_000;
+
+    /// 배치 봉투에 싣는 run 식별자(03). 생성은 호출부 몫
+    public string RunId { get; init; } = "";
 }
 
 /// ExitCode: 0 MaxTicks 도달, 4 송신 버퍼 닫힘(400 등), 130 취소

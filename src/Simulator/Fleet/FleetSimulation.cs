@@ -50,7 +50,7 @@ public sealed class FleetSimulation
         _renderer = renderer;
         _time = time;
         _generator = new TaskGenerator(map, options.Lambda, options.TickMs, options.Seed);
-        _events = sink is null ? null : new EventCollector(map.MapId, options.TickMs, time);
+        _events = sink is null ? null : new EventCollector(map.MapId, options.RunId, options.TickMs, time);
         var planner = new AStarPathPlanner();
         _lifecycle = new TaskLifecycle(map, planner, options, _events);
 
@@ -86,7 +86,7 @@ public sealed class FleetSimulation
     {
         _onBatch += onBatch;
         if (_events is not null) return;
-        _events = new EventCollector(_map.MapId, _options.TickMs, _time);
+        _events = new EventCollector(_map.MapId, _options.RunId, _options.TickMs, _time);
         _lifecycle.UseEvents(_events);
     }
 

@@ -69,7 +69,7 @@ if (options.Robots is { } robotCount)
     using var senderCts = new CancellationTokenSource();
     var sendLoop = Task.Run(() => sender.RunAsync(senderCts.Token));
 
-    var result = await new FleetSimulation(map, fleetOptions, sender, fleetDelay, fleetRenderer).RunAsync(cts.Token);
+    var result = await new FleetSimulation(map, fleetOptions with { RunId = runId }, sender, fleetDelay, fleetRenderer).RunAsync(cts.Token);
     var unsent = await sender.DrainAsync(CancellationToken.None);
     senderCts.Cancel();
     try { await sendLoop; }

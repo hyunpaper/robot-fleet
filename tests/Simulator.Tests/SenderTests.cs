@@ -47,7 +47,7 @@ public sealed class SenderTests : IDisposable
     [Fact]
     public void 송신_로그는_이벤트당_한_줄_형식()
     {
-        var batch = new EventBatch(FleetSchema.Version, Ids.Next(), "m", 5, 100, DateTimeOffset.UnixEpoch,
+        var batch = new EventBatch(FleetSchema.Version, Ids.Next(), "m", "r1", 5, 100, DateTimeOffset.UnixEpoch,
         [
             new EventItem(EventType.TaskCreated, FleetJson.ToElement(new TaskCreatedPayload("T-1", 0, new CellDto(1, 1), new CellDto(2, 2), 0))),
             new EventItem(EventType.RobotTelemetry, FleetJson.ToElement(new RobotTelemetryPayload("R-1", 0, 0, 0, 0, 100, null, 0, 0))),

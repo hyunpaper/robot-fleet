@@ -13,7 +13,7 @@ public sealed class IngestValidationTests
         FleetJson.ToElement(new RobotTelemetryPayload(robot, 1, 2, 0, 1, 90, null, 0, 0)));
 
     private static EventBatch Batch(params EventItem[] events) =>
-        new(FleetSchema.Version, Ids.Next(), "m-test", 7, 100, DateTimeOffset.Parse("2026-10-12T09:00:00Z"), events);
+        new(FleetSchema.Version, Ids.Next(), "m-test", "r-test", 7, 100, DateTimeOffset.Parse("2026-10-12T09:00:00Z"), events);
 
     public static TheoryData<string, Func<EventBatch, byte[]>> Invalids => new()
     {

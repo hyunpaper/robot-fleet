@@ -22,6 +22,8 @@ namespace RobotFleet.Shared.Messaging;
 [JsonSerializable(typeof(DeadlockDetectedPayload))]
 [JsonSerializable(typeof(PathReplannedPayload))]
 [JsonSerializable(typeof(RobotStatusChangedPayload))]
+[JsonSerializable(typeof(SimulationStartedPayload))]
+[JsonSerializable(typeof(SimulationEndedPayload))]
 public sealed partial class FleetJsonContext : JsonSerializerContext;
 
 public static class FleetJson

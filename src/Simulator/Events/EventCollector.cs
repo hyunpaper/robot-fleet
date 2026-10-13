@@ -9,6 +9,7 @@ namespace RobotFleet.Simulator.Events;
 public sealed class EventCollector
 {
     private readonly string _mapId;
+    private readonly string _runId;
     private readonly int _tickMs;
     private readonly UuidV7 _ids;
     private readonly int _maxPerBatch;
@@ -17,9 +18,10 @@ public sealed class EventCollector
     private long _tick;
     private DateTimeOffset _at;
 
-    public EventCollector(string mapId, int tickMs, TimeProvider time, int maxPerBatch = FleetSchema.MaxEventsPerBatch)
+    public EventCollector(string mapId, string runId, int tickMs, TimeProvider time, int maxPerBatch = FleetSchema.MaxEventsPerBatch)
     {
         _mapId = mapId;
+        _runId = runId;
         _tickMs = tickMs;
         _ids = new UuidV7(time);
         _maxPerBatch = maxPerBatch;
@@ -60,7 +62,7 @@ public sealed class EventCollector
         for (var i = 0; i < all.Count; i += _maxPerBatch)
         {
             var part = all.GetRange(i, Math.Min(_maxPerBatch, all.Count - i));
-            batches.Add(new EventBatch(FleetSchema.Version, _ids.Next(), _mapId, _tick, _tickMs, _at, part));
+            batches.Add(new EventBatch(FleetSchema.Version, _ids.Next(), _mapId, _runId, _tick, _tickMs, _at, part));
         }
 
         return batches;
