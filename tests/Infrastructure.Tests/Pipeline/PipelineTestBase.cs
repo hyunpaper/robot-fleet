@@ -29,6 +29,10 @@ public abstract class PipelineTestBase : IAsyncLifetime
     protected static EventItem Status(string robot, int from, int to, string reason) =>
         Item(EventType.RobotStatusChanged, new RobotStatusChangedPayload(robot, from, to, reason));
 
-    protected static EventBatch Batch(long tick, params EventItem[] events) =>
-        new(FleetSchema.Version, Ids.Next(), Map, "20261013-143022-r200", tick, 100, DateTimeOffset.UtcNow, events);
+    protected const string Run = "20261013-143022-r200";
+
+    protected static EventBatch Batch(long tick, params EventItem[] events) => BatchOf(Run, tick, events);
+
+    protected static EventBatch BatchOf(string runId, long tick, params EventItem[] events) =>
+        new(FleetSchema.Version, Ids.Next(), Map, runId, tick, 100, DateTimeOffset.UtcNow, events);
 }

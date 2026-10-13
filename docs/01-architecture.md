@@ -463,6 +463,7 @@ CREATE TABLE simulations (
     ticks         BIGINT,
     tasks_created INT, tasks_completed INT, tasks_failed INT,
     overruns      BIGINT,
+    stall_ms      BIGINT,            -- SimulationEnded.stallMs
     end_reason    TEXT               -- max_ticks | stopped | faulted
 );
 

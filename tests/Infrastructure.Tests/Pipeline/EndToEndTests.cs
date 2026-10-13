@@ -90,15 +90,20 @@ public sealed class EndToEndTests : PipelineTestBase, IDisposable
         await using var conn = await rig.Pg!.DataSource.OpenConnectionAsync();
         await SentEventImporter.ImportAsync(conn, SendLogReader.Read(logPath), default);
         var queries = new ReconcileQueries();
-        var task = await queries.TaskAsync(conn, map.MapId, default);
-        var conflict = await queries.ConflictAsync(conn, map.MapId, default);
-        var telemetry = await queries.TelemetryAsync(conn, map.MapId, default);
+        var task = await queries.TaskAsync(conn, default);
+        var conflict = await queries.ConflictAsync(conn, default);
+        var telemetry = await queries.TelemetryAsync(conn, default);
 
         task.Sent.Should().BeGreaterThan(0);
         task.Missing.Should().Be(0, string.Join(",", task.MissingSample));
         conflict.Missing.Should().Be(0, string.Join(",", conflict.MissingSample));
         telemetry.Missing.Should().Be(0);
-        (await queries.InvalidTransitionsAsync(conn, map.MapId, default)).Should().Be(0);
+        (await queries.InvalidTransitionsAsync(conn, default)).Should().Be(0);
+        var runs = await queries.RunIdsAsync(conn, default);
+        runs.Should().ContainSingle();
+        await queries.ComputeRunMetricsAsync(conn, runs[0], default);
+        (await rig.ScalarAsync("SELECT count(*) FROM run_metrics WHERE utilization IS NOT NULL")).Should().Be(1);
+        (await rig.ScalarAsync("SELECT count(*) FROM simulations WHERE started_at IS NOT NULL AND ended_at IS NOT NULL")).Should().Be(1);
         await using var dup = new NpgsqlCommand("SELECT count(*) - count(DISTINCT task_id) FROM task_history", conn);
         ((long)(await dup.ExecuteScalarAsync())!).Should().Be(0);
     }

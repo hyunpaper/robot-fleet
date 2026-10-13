@@ -35,16 +35,15 @@ public static class WorkerMetrics
     public static readonly Gauge QueueDepth = Metrics.CreateGauge(
         "fleet_queue_depth", "큐 대기 메시지 수", new GaugeConfiguration { LabelNames = ["queue"] });
 
-    internal static void Record(IReadOnlyList<Delivery> batch, StoreResult r, int invalid, int poison, int skipped)
+    internal static void Record(IReadOnlyList<Delivery> batch, StoreResult r, int invalid, int poison)
     {
         Messages.WithLabels("telemetry", "stored").Inc(r.TelemetryInserted);
         Messages.WithLabels("telemetry", "duplicate").Inc(r.TelemetryDuplicate);
-        Messages.WithLabels("task", "stored").Inc(r.TaskInserted + r.StatusInserted);
+        Messages.WithLabels("task", "stored").Inc(r.TaskInserted + r.StatusInserted + r.RunEvents);
         Messages.WithLabels("task", "duplicate").Inc(r.TaskDuplicate + r.StatusDuplicate);
         Messages.WithLabels("task", "invalid").Inc(invalid);
-        Messages.WithLabels("conflict", "stored").Inc(r.ConflictInserted);
-        Messages.WithLabels("conflict", "duplicate").Inc(r.ConflictDuplicate);
-        Messages.WithLabels("conflict", "skipped").Inc(skipped);
+        Messages.WithLabels("conflict", "stored").Inc(r.ConflictInserted + r.ReplanInserted);
+        Messages.WithLabels("conflict", "duplicate").Inc(r.ConflictDuplicate + r.ReplanDuplicate);
         Messages.WithLabels("any", "dead_lettered").Inc(poison);
         BatchSize.Observe(batch.Count);
     }

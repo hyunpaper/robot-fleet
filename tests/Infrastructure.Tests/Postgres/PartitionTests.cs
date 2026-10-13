@@ -44,8 +44,8 @@ public sealed class PartitionTests
     private static async Task Insert(PgSchemaFixture pg, long tick, string occurredAt)
     {
         await using var cmd = pg.DataSource.CreateCommand(
-            "INSERT INTO robot_telemetry (map_id, robot_id, tick, x, y, heading, status, occurred_at) " +
-            $"VALUES ('m', 'r', {tick}, 0, 0, 0, 0, '{occurredAt}')");
+            "INSERT INTO robot_telemetry (run_id, map_code, robot_id, tick, x, y, heading, status, occurred_at) " +
+            $"VALUES ('20261012-000000-r1', 'm', 'r', {tick}, 0, 0, 0, 0, '{occurredAt}')");
         await cmd.ExecuteNonQueryAsync();
     }
 

@@ -25,6 +25,7 @@ public sealed class IngestValidationTests
         { "robotId", b => FleetJson.Serialize(b with { Events = [new EventItem(EventType.RobotTelemetry, JsonDocument.Parse("""{"x":1}""").RootElement)] }) },
         { "tickMs", b => FleetJson.Serialize(b with { TickMs = 0 }) },
         { "mapId", b => FleetJson.Serialize(b with { MapId = " " }) },
+        { "runId", b => FleetJson.Serialize(b with { RunId = "" }) },
         { "JSON", _ => "{not json"u8.ToArray() },
     };
 

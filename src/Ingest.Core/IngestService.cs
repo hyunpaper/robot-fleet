@@ -107,6 +107,8 @@ public sealed class IngestService
             return (null, null, "batchId가 UUIDv7이 아니다");
         if (string.IsNullOrWhiteSpace(batch.MapId))
             return (null, null, "mapId가 비어 있다");
+        if (string.IsNullOrWhiteSpace(batch.RunId))
+            return (null, null, "runId가 비어 있다");
         if (batch.TickMs < 1)
             return (null, null, "tickMs는 1 이상이어야 한다");
         if (batch.Events is null || batch.Events.Count is < 1 or > FleetSchema.MaxEventsPerBatch)

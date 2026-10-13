@@ -81,6 +81,22 @@ public sealed class WorkerIntegrationTests : PipelineTestBase
     }
 
     [IntegrationFact(TestEnv.RabbitMqVar, TestEnv.PgVar)]
+    public async Task R_run_01_새_run의_첫_전이는_이전_run_상태와_비교하지_않는다()
+    {
+        var rig = await RigAsync(redis: false, postgres: true);
+        const string runB = "20261013-150000-r200";
+        await rig.SendAsync(Batch(1, Status("R-001", 0, 1, "task_assigned")));      // run A: Idle → Moving
+        await rig.SendAsync(BatchOf(runB, 1, Status("R-001", 0, 1, "task_assigned")));   // run B: 다시 Idle에서 시작
+
+        rig.StartWorker("w-a");
+        await PipelineRig.UntilAsync(async () => await rig.ScalarAsync("SELECT count(*) FROM robot_status_log") == 2);
+        await rig.DrainedAsync();
+        (await rig.ScalarAsync("SELECT count(*) FROM robot_status_log WHERE NOT valid")).Should().Be(0);
+        (await rig.ScalarAsync("SELECT count(*) FROM robot_state WHERE robot_id = 'R-001'")).Should().Be(2);
+        (await rig.CountAsync(TopologySpec.InvalidQueueName(rig.Rabbit.Prefix))).Should().Be(0);
+    }
+
+    [IntegrationFact(TestEnv.RabbitMqVar, TestEnv.PgVar)]
     public async Task W09_재전달된_상태_변경은_오탐하지_않는다()
     {
         var rig = await RigAsync(redis: false, postgres: true);

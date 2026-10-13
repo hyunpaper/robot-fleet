@@ -19,6 +19,7 @@ CREATE TABLE simulations (
     ticks         BIGINT,
     tasks_created INT, tasks_completed INT, tasks_failed INT,
     overruns      BIGINT,
+    stall_ms      BIGINT,            -- SimulationEnded.stallMs (송신 버퍼 틱 정지 누적)
     end_reason    TEXT               -- max_ticks | stopped | faulted
 );
 

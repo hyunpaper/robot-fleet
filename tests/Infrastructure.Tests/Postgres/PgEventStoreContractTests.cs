@@ -26,20 +26,32 @@ public sealed class PgEventStoreContractTests : EventStoreContract, IAsyncLifeti
     protected override async Task<(long MoveMs, long WaitMs, long TaskCount)> ReadMetricsAsync(string robotId, DateTimeOffset minute)
     {
         await using var cmd = _pg!.DataSource.CreateCommand(
-            "SELECT move_ms, wait_ms, task_count FROM metrics_minute WHERE map_id = @m AND robot_id = @r AND minute = @t");
-        cmd.Parameters.AddWithValue("m", Map);
+            "SELECT move_ms, wait_ms, task_count FROM metrics_minute WHERE run_id = @run AND robot_id = @r AND minute = @t");
+        cmd.Parameters.AddWithValue("run", Run);
         cmd.Parameters.AddWithValue("r", robotId);
         cmd.Parameters.AddWithValue("t", StoreMapping.MinuteOf(minute));
         await using var reader = await cmd.ExecuteReaderAsync();
         return await reader.ReadAsync() ? (reader.GetInt32(0), reader.GetInt32(1), reader.GetInt32(2)) : (0, 0, 0);
     }
 
-    protected override async Task<(short Status, string? RobotId)?> ReadTaskAsync(string taskId)
+    protected override async Task<(short Status, string? RobotId)?> ReadTaskAsync(string runId, string taskId)
     {
-        await using var cmd = _pg!.DataSource.CreateCommand("SELECT status, robot_id FROM task_history WHERE task_id = @t");
+        await using var cmd = _pg!.DataSource.CreateCommand("SELECT status, robot_id FROM task_history WHERE run_id = @run AND task_id = @t");
+        cmd.Parameters.AddWithValue("run", runId);
         cmd.Parameters.AddWithValue("t", taskId);
         await using var reader = await cmd.ExecuteReaderAsync();
         return await reader.ReadAsync() ? (reader.GetInt16(0), reader.IsDBNull(1) ? null : reader.GetString(1)) : null;
+    }
+
+    protected override async Task<(string MapCode, int? Robots, bool Started, bool Ended)?> ReadSimulationAsync(string runId)
+    {
+        await using var cmd = _pg!.DataSource.CreateCommand(
+            "SELECT map_code, robots, started_at IS NOT NULL, ended_at IS NOT NULL FROM simulations WHERE run_id = @run");
+        cmd.Parameters.AddWithValue("run", runId);
+        await using var reader = await cmd.ExecuteReaderAsync();
+        return await reader.ReadAsync()
+            ? (reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetInt32(1), reader.GetBoolean(2), reader.GetBoolean(3))
+            : null;
     }
 
     public Task InitializeAsync() => Task.CompletedTask;
@@ -57,6 +69,12 @@ public sealed class PgEventStoreContractTests : EventStoreContract, IAsyncLifeti
     [IntegrationFact(TestEnv.PgVar)] public Task C03_W12_task_history_단조() => Task_history_is_monotonic();
     [IntegrationFact(TestEnv.PgVar)] public Task C03_위반_영수증과_상태() => Status_receipts_keep_invalid_and_state_follows_valid_only();
     [IntegrationFact(TestEnv.PgVar)] public Task C03_conflict_중복() => Duplicate_conflict_is_ignored();
+    [IntegrationFact(TestEnv.PgVar)] public Task R_run_01_robot_state는_run별로_분리() => Robot_state_is_separated_by_run();
+    [IntegrationFact(TestEnv.PgVar)] public Task R_run_02_같은_taskId도_새_run은_단조_upsert에_막히지_않는다() => Same_task_id_in_new_run_is_not_blocked();
+    [IntegrationFact(TestEnv.PgVar)]
+    public Task R_run_03_SimulationStarted보다_먼저_온_telemetry도_적재() =>
+        Telemetry_before_simulation_started_is_stored_then_meta_filled();
+    [IntegrationFact(TestEnv.PgVar)] public Task replan_log_중복은_1회() => Replan_is_stored_once();
 
     [IntegrationFact(TestEnv.PgVar)]
     public async Task D04_unnest_1000행_RETURNING은_새_행만()
