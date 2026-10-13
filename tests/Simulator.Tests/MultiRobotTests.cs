@@ -277,6 +277,37 @@ public class MultiRobotTests
     }
 
     [Fact]
+    public void OnDeadlock_YieldExpired_ClearsYielding_WithoutEvent()
+    {
+        // 양보 TTL 만료는 이벤트 없이 양보 표시만 푼다 → 그 로봇이 다시 재계획(§6) 대상으로 복귀한다
+        var map = TestMaps.PocketCorridor();
+        var options = new FleetOptions { WorkMs = 0, TickMs = 100, SpeedFactor = 0 };
+        var planner = new AStarPathPlanner();
+        var collector = new EventCollector(map.MapId, "r", options.TickMs, TimeProvider.System);
+        var lifecycle = new TaskLifecycle(map, planner, options, collector);
+        var arbiter = new InMemoryMoveArbiter();
+        var stepper = new RobotStepper(map, planner, arbiter,
+            new SimulationOptions { MapPath = "", Goal = default, TickMs = 100, SpeedFactor = 0 }, new SimulationStats(), null, lifecycle);
+        lifecycle.Stepper = stepper;
+        var robot = new Robot { RobotId = "R-001", MapId = map.MapId, Position = new(2, 0), Heading = Heading.East };
+        arbiter.Register(map.MapId, "R-001", new(2, 0));
+        lifecycle.Add(robot);
+        collector.Begin(1, DateTimeOffset.UnixEpoch);
+        lifecycle.Assign(robot, new TransportTask { TaskId = "T", MapId = map.MapId, Type = TaskType.Transport, Origin = new(2, 0), Destination = new(5, 0) }, 1);
+
+        var detected = new DeadlockInfo(new[] { "R-001", "R-002" }, new[] { new Point(2, 0), new Point(3, 0) },
+            "yield", "R-001", new Point(2, 1), 1, 1, 0, DeadlockPhase.Detected, IsNew: true, NoYieldRetries: 0);
+        lifecycle.OnDeadlock(detected, 1);
+        lifecycle.IsYielding("R-001").Should().BeTrue();
+
+        lifecycle.OnDeadlock(detected with { Phase = DeadlockPhase.YieldExpired }, 10);
+
+        lifecycle.IsYielding("R-001").Should().BeFalse();   // 복귀
+        collector.Complete(Array.Empty<RobotTelemetryPayload>())
+            .SelectMany(b => b.Events).Should().NotContain(e => e.EventType == EventType.DeadlockDetected);   // 이벤트 없음
+    }
+
+    [Fact]
     public void OnDeadlock_IgnoresReusedInfo_NoDuplicateEmit()   // DL-11 IsNew
     {
         var map = TestMaps.DeadEndCorridor();

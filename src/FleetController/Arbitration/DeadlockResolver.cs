@@ -52,8 +52,8 @@ public sealed class DeadlockResolver
         var cycles = DeadlockGraph.FindCycles(waitEdges, waitMs, _options.DeadlockDetectWaitMs);
         var present = cycles.Select(Key).ToHashSet(StringComparer.Ordinal);
 
-        // 재시도 중(양보 아님) 에피소드의 순환 존재 여부 갱신 — 소멸 유예(reroute 판정)용
-        foreach (var (key, e) in _episodes)
+        // 재시도 중(양보 아님) 에피소드의 순환 존재 여부 갱신 — 소멸 유예(reroute 판정)용. 순회 중 수정하므로 ToList
+        foreach (var (key, e) in _episodes.ToList())
             if (e.YieldRobotId is null)
                 _episodes[key] = e with { AbsentSinceTick = present.Contains(key) ? null : (e.AbsentSinceTick ?? tick) };
 
@@ -125,7 +125,9 @@ public sealed class DeadlockResolver
                 }
                 else if (tick >= ep.YieldExpireTick)
                 {
-                    // TTL 만료: 양보가 제때 못 끝남 → 발행 없이 재시도로 전환, 에피소드 유지(다음에 다른 로봇을 양보시킬 수 있다)
+                    // TTL 만료: 양보가 제때 못 끝남 → 발행 없이 재시도로 전환. 양보하던 로봇의 Simulator 양보 표시를 풀도록
+                    // YieldExpired 지시를 낸다(이벤트 아님). 안 내면 그 로봇이 작업 끝날 때까지 재계획 대상에서 빠진다
+                    results.Add(Info(ep, DeadlockPhase.YieldExpired, "yield", 0, true));
                     _episodes[key] = ep with { YieldRobotId = null, YieldTo = null, LastAttemptTick = tick, AbsentSinceTick = null };
                 }
             }

@@ -144,8 +144,11 @@ public sealed class DeadlockResolverTests
         var resolver = new DeadlockResolver(opts, tickMs: 100);
         resolver.Resolve(10, edges, wait, prio, pos, map, reserved).Should().ContainSingle();   // 양보 시작(TTL 만료 틱=60)
 
-        resolver.DetectCompletions(60, pos).Should().BeEmpty();   // 미도착 TTL 만료 → 발행 없음
-        resolver.IsYielding("R-001").Should().BeFalse();          // 양보 해제(재시도로 전환)
+        var expired = resolver.DetectCompletions(60, pos);   // 미도착 TTL 만료
+        expired.Should().ContainSingle();
+        expired[0].Phase.Should().Be(DeadlockPhase.YieldExpired);   // 이벤트 아님 — Simulator 양보 표시 해제 지시
+        expired[0].YieldRobotId.Should().Be("R-001");               // 만료된 양보 로봇
+        resolver.IsYielding("R-001").Should().BeFalse();            // 재시도로 전환
     }
 
     [Fact]

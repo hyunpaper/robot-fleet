@@ -41,6 +41,9 @@ internal sealed class TaskLifecycle : IRobotObserver
 
     public FleetPhase PhaseOf(Robot robot) => _runs[robot.RobotId].Phase;
 
+    /// 양보 이동 표시 여부(테스트 관찰용). 양보 중이면 재계획(§6) 대상에서 빠진다
+    public bool IsYielding(string robotId) => _runs.TryGetValue(robotId, out var r) && r.Yielding;
+
     public IEnumerable<Robot> IdleRobots() => _runs.Values.Where(r => r.Phase == FleetPhase.Idle).Select(r => r.Robot);
 
     public void Assign(Robot robot, TransportTask task, long tick)
@@ -146,6 +149,10 @@ internal sealed class TaskLifecycle : IRobotObserver
             case DeadlockPhase.Detected:
                 var yielded = StartYield(info, tick);
                 return yielded is null ? Array.Empty<string>() : new[] { yielded };
+            case DeadlockPhase.YieldExpired:
+                // 양보 TTL 만료 — 이벤트 없이 양보 표시만 푼다. 그 로봇이 다시 재계획(§6) 대상이 된다
+                if (info.YieldRobotId is { } exp && _runs.TryGetValue(exp, out var er)) er.Yielding = false;
+                return Array.Empty<string>();
             case DeadlockPhase.Resolved:
             case DeadlockPhase.Reroute:
             case DeadlockPhase.Failed:
