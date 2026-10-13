@@ -149,16 +149,6 @@ Simulator ──(틱마다 배치 이동 요청)──► FleetController ◄─
 | **경로 계획** | 최단 경로의 잦은 회전으로 지연 | 방향 포함 A*, 회전 비용 반영, 1회 0.15ms |
 | **효율 측정** | 정지 시간만으로 원인 구분 불가 | 이동·작업·대기·유휴 분해, 병목 위치 특정 |
 
-## 배포 환경 (예정)
-
-자체 서버 또는 클라우드에 k3s 노드 3대로 구성한다. 아래 주소는 예시다.
+## 배포 환경
 
 <a href="https://raw.githubusercontent.com/hyunpaper/robot-fleet/main/docs/images/deployment-ha.svg"><img src="docs/images/deployment-ha.svg" alt="배포 구성"></a>
-
-| 노드 | 주소 | 역할 |
-|---|---|---|
-| node-1 | 192.168.10.11 | k3s server, 애플리케이션, PostgreSQL, Redis·Sentinel·RabbitMQ 멤버 |
-| node-2 | 192.168.10.12 | 애플리케이션, Redis·Sentinel·RabbitMQ 멤버 |
-| node-3 | 192.168.10.13 | 애플리케이션, 모니터링(실험 시), Redis·Sentinel·RabbitMQ 멤버 |
-
-노드는 기본 4GiB·2 vCPU, 실험 시 8GiB·4 vCPU다. Redis(primary 1 + replica 2 + Sentinel 3)와 RabbitMQ(3노드, quorum queue)는 세 노드에 분산된다. 자세한 내용은 07, 08 문서 참고.
