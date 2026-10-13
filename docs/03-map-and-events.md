@@ -459,11 +459,11 @@ M9 1단계가 이 두 값으로 `no_yield_point`를 판정한다(04 "M9 교착 �
     "tickMs":   100,
     "taskSeed": 20261013,
     "environment": "local",           // local | aws
-    "lineId":   "L-A",
+    "lineCode": "L-A",
     "mapId":    "factory-a",
     "mapVersion": 1,
     "mapHash":  "sha256:9f1c…",
-    "taskPatternId": "P-A-standard",
+    "taskPatternCode": "P-A-standard",
     "params": { "congestion_alpha": 0, "turn_cost": 0.5 }
   }
 }

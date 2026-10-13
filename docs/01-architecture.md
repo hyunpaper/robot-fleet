@@ -740,7 +740,7 @@ CREATE TABLE task_pattern_flows (
 | **정본** | `maps/*.json` · `master/*.json` — git에서 버전 관리. 맵 파일 구조는 바꾸지 않는다 |
 | 적재본 | 위 기준정보 테이블 — 질의 · 조인 · 재생기용 |
 | 적재 경로 | 마이그레이션 / 시드 스크립트 (`db/seed/`) |
-| run과의 대조 | `SimulationStarted.payload`의 `lineId` · `mapId` · `mapVersion` · **`mapHash`** · `taskPatternId`(03). DB 해시와 다르면 경고 |
+| run과의 대조 | `SimulationStarted.payload`의 `lineCode` · `mapId` · `mapVersion` · **`mapHash`** · `taskPatternCode`(03). DB 해시와 다르면 경고 |
 
 분석 질의는 코드로 조인한다.
 
