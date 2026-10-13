@@ -366,7 +366,7 @@ POST /api/v1/events/batch
   "payload": {
     "taskId":  "T-00042",
     "robotId": "R-012",
-    "reason":  "no_path",       // no_path | timeout | deadlock_unresolved | battery
+    "reason":  "no_path",       // no_path | timeout | deadlock_unresolved | replan_exceeded | battery
     "atX": 23, "atY": 14
   }
 }
