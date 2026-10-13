@@ -12,7 +12,7 @@
 | D2 | 인프라 인터페이스 5종 | **6종** — `IPartitionSubscriber`(소비 쪽) 추가 | `IEventPublisher`는 발행만 다룬다. 워커의 구독 · SAC · ack · 반환은 경계가 따로 있어야 한다 |
 | D3 | 파티션 생성은 기동 시와 자정 | 기동 시 + **매시 정각**, 그리고 **DEFAULT 파티션** | 자정 타이머 하나는 그 순간 재시작 중이면 놓친다. 매시 확인은 멱등이라 비용이 없다. DEFAULT는 그래도 빠진 날짜의 행을 받아 INSERT 실패(=유실)를 원천 차단 |
 | D4 | (01) `metrics_minute` 멱등은 Redis `metrics_applied` 집합 | **같은 PG 트랜잭션의 `INSERT … ON CONFLICT DO NOTHING RETURNING`** 결과로만 집계 | M3의 Redis는 선택이다(09). 실제로 새로 들어간 행만 집계하면 별도 집합 없이 정확히 1회. 집합 기록과 집계가 같은 트랜잭션이라 사이에서 죽어도 어긋나지 않는다 |
-| D5 | (09) EventWorker는 HTTP 없음 | 업무 API는 없고 **관리 포트**(`/metrics` · `/health/*`)만 | 09 완료 기준 2~6의 메트릭 출처이고 readiness가 필요하다 |
+| D5 | (09) EventWorker는 HTTP 없음 | 업무 API는 없고 **관리 포트**(`/metrics` · `/health/*`)만. **Simulator에도 관리 포트**를 두고 run 전환 `POST /admin/run`을 연다(02 "run 관리"). **둘 다 인그레스 · 터널에 올리지 않는다** | 09 완료 기준 2~6의 메트릭 출처이고 readiness가 필요하다. 로봇 수 · 배속을 외부에서 바꿀 수 있으면 실험이 통째로 무의미해진다 |
 | D7 | (09) L1 인메모리 fake · in-process 모드 · 계약 테스트 InMemory 실행 | **대역 없음.** 인프라가 닿는 검증은 실제 RabbitMQ · Redis · PostgreSQL 통합 테스트만(§12). `Infrastructure.InMemory` · `PipelineHost` 삭제 | 사용자 지시. 대역이 실제와 다르면 거짓 안심이 된다. 서버가 없으면 통합 테스트는 skip |
 | D6 | (09) 적재 집합 = `task_history` 전이 · `conflict_log` | `task_event_log` · `robot_status_log`(이벤트당 1행, `event_id` PK) 추가 | `task_history`는 최종 상태만 남아 "어느 이벤트가 들어왔는가"를 증명할 수 없다. 이벤트 단위 영수증이 있어야 차집합이 정확하다 |
 
@@ -35,7 +35,7 @@
 | 구성 | 위치 | 동작 |
 |---|---|---|
 | `FleetSimulation` | `src/Simulator/Fleet/` | 로봇 N대 루프. 틱마다 ① 생성 ② 할당 ③ `StepAllAsync` ④ 생애주기 전이 ⑤ 이벤트 확정 ⑥ 송신 큐에 넣기 |
-| `TaskGenerator` | 〃 | 포아송(λ건/초, 틱당 `λ × tickMs/1000` 기대값), Station 무작위 출발 · 목적(같으면 재추첨). **시드 고정 가능**(재현 실험) |
+| `TaskGenerator` | 〃 | 포아송(λ건/초, 틱당 `λ × tickMs/1000` 기대값), 출발 · 목적은 **`task_pattern_flows`의 `weight`에 따라 설비 쌍 추첨**(01 기준정보, 출발 ≠ 목적은 DB 제약). **시드 고정 가능**(재현 실험). 현재 구현은 Station 무작위 쌍 — 전환은 후속 작업 |
 | `TaskDispatcher` | 〃 | 대기 작업 FIFO × 맨해튼 거리 최근접 `Idle` 로봇. 동점은 `robotId` 오름차순 |
 | `TaskLifecycle` | 〃 | 작업 1건 = 이동 구간 2개(→ 출발지, → 목적지). `RobotStepper`에는 구간마다 내부 `TransportTask`를 넘기고(TraceExport 방식), 도메인 작업 상태는 여기서 관리. 적재 · 하역 체류 = `WorkMs`(기본 2000ms, 03 예시 `workMs 4000`의 절반씩) |
 | `EventCollector` | `src/Simulator/Events/` | `IEventSink` 구현. 틱 안의 발생을 받아 03 순서로 배치 1건 확정 |
@@ -276,13 +276,23 @@ return {'BUSY'}
 
 | 이벤트 | 테이블 · 방식 | 멱등 |
 |---|---|---|
-| RobotTelemetry | `robot_telemetry` `unnest` INSERT `ON CONFLICT DO NOTHING RETURNING robot_id, status, occurred_at` | 자연 키(01) |
+| RobotTelemetry | `robot_telemetry` `unnest` INSERT `ON CONFLICT DO NOTHING RETURNING robot_id, status, occurred_at` | 자연 키 `(run_id, robot_id, tick, occurred_at)`(01) |
 | (집계) | 위 RETURNING 행만 `metrics_minute`에 상태별로 그 행의 봉투 `tickMs` 가산 (Moving → move, Loading · Unloading → work, Waiting → wait, Idle → idle) | **새로 들어간 행만** 집계(D4) |
 | Task* | `task_event_log` INSERT `ON CONFLICT (event_id) DO NOTHING RETURNING` → 새 행만 `task_history` 단조 upsert(01) | 이벤트 영수증 + 단조 상태 |
 | (집계) | 새로 들어간 TaskCompleted만 `metrics_minute.task_count + 1` | 위와 같은 방식 |
 | RobotStatusChanged | 검증 → `robot_status_log` INSERT(`valid` 포함) `ON CONFLICT DO NOTHING RETURNING` → 새 행이면서 `valid`인 것만 `robot_state` 갱신 | 위반도 영수증은 남는다 |
-| ConflictDetected · DeadlockDetected | `conflict_log` `ON CONFLICT (event_id) DO NOTHING` | 01 |
-| PathReplanned | M3는 `conflict_log`에 넣지 않고 세기만(`fleet_worker_messages_total`) | 테이블이 01에 없다. M7에서 정한다 |
+| ConflictDetected · DeadlockDetected | `conflict_log` `ON CONFLICT (event_id) DO NOTHING`. DeadlockDetected는 **`resolved_ms` · `yield_robot_id` · `yield_to_x/y` · `searched_distance`**도 적재 | 01 |
+| PathReplanned | **`replan_log` INSERT** `ON CONFLICT (event_id) DO NOTHING` | 01. 05 재계획률 · 실험 5 · M9 `replan_storm`의 입력. "M7에서 정한다"를 M3로 당겼다 — M7이 바로 이 지표를 쓰는 실험이다 |
+| SimulationStarted | `simulations` **UPSERT** (`ON CONFLICT (run_id) DO UPDATE`로 메타 · `line_code` · `pattern_code` · `map_code` · `map_version` · `map_hash` · `params` 채움). **`mapHash`를 DB `maps`와 대조**, 다르면 경고 로그 | `run_id` |
+| SimulationEnded | 같은 행에 종료 통계 UPDATE | `run_id` |
+| (run 집계) | **Reconcile 차집합 0 확인 뒤** `run_metrics` 1행 생성 | `SimulationEnded` 직후에는 다른 파티션의 telemetry가 아직 적재 중일 수 있다. Reconcile이 이미 "적재 완료"를 판정하므로 그 결과를 재사용한다 |
+
+**모든 INSERT에 봉투의 `runId`를 싣고, 봉투의 `mapId`는 `map_code` 컬럼에 넣는다**(01 키 정책).
+
+> **`simulations`로 FK를 걸지 않는다.** `SimulationStarted`는 `mapId` 라우팅, telemetry는 `robotId` 해시 라우팅이라
+> **다른 파티션**이고 순서가 보장되지 않는다. telemetry가 먼저 도착하면 FK 위반 → 반환 → DLQ가 된다.
+> 사실 테이블 적재 시 `simulations` 행이 없으면 `run_id`만 가진 **최소 행을 UPSERT**로 만들고,
+> `SimulationStarted`가 나중에 와서 나머지를 채운다.
 
 `tickMs`는 메시지 봉투에서 읽는다(§2). 워커에 틱 길이 설정이 없으므로 Simulator `--tick`을 바꿔도 시간 분해가 맞는다.
 
@@ -290,7 +300,7 @@ return {'BUSY'}
 
 | 항목 | 결정 | 근거 |
 |---|---|---|
-| 기준 상태 | `robot_state(map_id, robot_id, status, last_tick, last_event_id)` | 재배정으로 파티션 주인이 바뀌어도 이어서 검증 |
+| 기준 상태 | `robot_state(run_id, robot_id, map_code, status, last_tick, last_event_id)`, **PK `(run_id, robot_id)`**. 조회도 `(run_id, robot_id)` | 재배정으로 파티션 주인이 바뀌어도 이어서 검증. **`run_id`가 빠지면 run 2의 첫 전이 `Idle → Moving`이 이전 run의 `Moving`과 불일치 판정되어 로봇 전부가 `valid=false` 영수증 + `fleet.invalid`가 된다** — M3 완료 기준 "invalid 0"이 무너진다 |
 | 규칙 | `(from, to, reason)`이 `StatusTransitions` 표에 있고, `from == robot_state.status`(행이 없으면 첫 관측으로 통과) | 03 |
 | 중복 전달 | `robot_status_log`에 이미 있는 `event_id`면 검증 없이 건너뜀 | 크래시 후 재전달이 "from 불일치"로 오탐되지 않게 |
 
@@ -331,12 +341,14 @@ return {'BUSY'}
 
 | 테이블 | 키 | 추가 이유 |
 |---|---|---|
-| `robot_telemetry` (일 파티션) + `robot_telemetry_default` | `(map_id, robot_id, tick, occurred_at)` | DEFAULT는 D3 |
-| `task_history` · `conflict_log` · `metrics_minute` | 01 | |
-| `task_event_log(event_id PK, map_id, task_id, event_type, tick, occurred_at)` | `event_id` | D6 |
-| `robot_status_log(event_id PK, map_id, robot_id, tick, from_status, to_status, reason, valid, occurred_at)` | `event_id` | D6 · 중복 판별. `valid = false`는 전이 위반 |
-| `robot_state(map_id, robot_id PK, status, last_tick, last_event_id)` | `(map_id, robot_id)` | §6 검증 |
+| `robot_telemetry` (일 파티션) + `robot_telemetry_default` | `(run_id, robot_id, tick, occurred_at)` | DEFAULT는 D3 |
+| `simulations` · `task_history` · `conflict_log` · `replan_log` · `metrics_minute` · `run_metrics`, 기준정보 7개 | 01 | |
+| `task_event_log(event_id PK, run_id, map_code, task_id, event_type, tick, occurred_at)` | `event_id` (유지) + `run_id` 인덱스 | D6 |
+| `robot_status_log(event_id PK, run_id, map_code, robot_id, tick, from_status, to_status, reason, valid, occurred_at)` | `event_id` (유지) + `run_id` 인덱스 | D6 · 중복 판별. `valid = false`는 전이 위반 |
+| `robot_state(run_id, robot_id, map_code, status, last_tick, last_event_id)` | **`(run_id, robot_id)`** | §6 검증 |
 | `schema_migrations` | `version` | |
+
+> 영수증 두 테이블은 PK를 건드리지 않는다 — `eventId = {batchId}/{index}`이고 batchId가 UUIDv7이라 run 간 충돌이 없다.
 
 ### 파티션
 
@@ -349,8 +361,8 @@ return {'BUSY'}
 ### 배치 INSERT
 
 ```sql
-INSERT INTO robot_telemetry (map_id, robot_id, tick, x, y, heading, status, battery, occurred_at)
-SELECT * FROM unnest(@map_id::text[], @robot_id::text[], @tick::bigint[], @x::smallint[], @y::smallint[],
+INSERT INTO robot_telemetry (run_id, map_code, robot_id, tick, x, y, heading, status, battery, occurred_at)
+SELECT * FROM unnest(@run_id::text[], @map_code::text[], @robot_id::text[], @tick::bigint[], @x::smallint[], @y::smallint[],
                      @heading::smallint[], @status::smallint[], @battery::smallint[], @occurred_at::timestamptz[])
 ON CONFLICT DO NOTHING
 RETURNING robot_id, status, occurred_at;
@@ -358,9 +370,9 @@ RETURNING robot_id, status, occurred_at;
 
 | 설정 | 값 | 근거 |
 |---|---|---|
-| 방식 | `unnest` 배열 파라미터 | 행 수와 무관하게 파라미터 9개. 다중 VALUES는 65535 파라미터 한계와 매번 다른 SQL 문 |
+| 방식 | `unnest` 배열 파라미터 | 행 수와 무관하게 파라미터 10개. 다중 VALUES는 65535 파라미터 한계와 매번 다른 SQL 문 |
 | Npgsql | 8.x, `NpgsqlDataSource` | |
-| `MaxPoolSize` | **10** / 워커 | 워커 최대 8대(HPA) × 10 = 80 < PostgreSQL 기본 `max_connections` 100. 파티션 처리기는 연결 세마포어로 대기 |
+| `MaxPoolSize` | **10** / 워커 | 워커 최대 3대(HPA, 02) × 10 = 30 < PostgreSQL 기본 `max_connections` 100. 파티션 처리기는 연결 세마포어로 대기 |
 | 명령 타임아웃 | 10s | 배치는 수 ms. 넘으면 일시 오류로 보고 재시도 |
 
 ---
@@ -425,7 +437,7 @@ Simulator 명령행 추가: `--robots N` · `--lambda λ` · `--seed n` · `--in
 | 단계 | 동작 |
 |---|---|
 | 1 | 적체 0 대기: 실행 스크립트가 `fleet_queue_depth` 합 = 0이 10초 유지될 때까지 기다린 뒤 도구를 부른다 |
-| 2 | 송신 로그를 임시 테이블 `sent(event_id, event_type, category, key, tick)`로 `COPY`(Npgsql binary import) |
+| 2 | 송신 로그를 임시 테이블 `sent(event_id, run_id, event_type, category, key, tick)`로 `COPY`(Npgsql binary import). `run_id`는 송신 로그 파일명 `{mapId}-{runId}.jsonl`에서 읽는다 |
 | 3 | 차집합 SQL (아래) |
 | 4 | JSON 요약 출력 + 종료 코드: task · conflict 누락 0이면 0, 아니면 1 |
 
@@ -433,20 +445,23 @@ Simulator 명령행 추가: `--robots N` · `--lambda λ` · `--seed n` · `--in
 -- task 범주: Task* + RobotStatusChanged
 SELECT s.event_id FROM sent s
 WHERE s.category = 'task'
-  AND NOT EXISTS (SELECT 1 FROM task_event_log t WHERE t.event_id = s.event_id)
-  AND NOT EXISTS (SELECT 1 FROM robot_status_log r WHERE r.event_id = s.event_id);   -- valid 무관
+  AND NOT EXISTS (SELECT 1 FROM task_event_log t WHERE t.event_id = s.event_id AND t.run_id = s.run_id)
+  AND NOT EXISTS (SELECT 1 FROM robot_status_log r WHERE r.event_id = s.event_id AND r.run_id = s.run_id);   -- valid 무관
 -- 전이 위반 수 (기준 3)
-SELECT count(*) FROM robot_status_log WHERE map_id = @map AND NOT valid;
+SELECT count(*) FROM robot_status_log WHERE run_id = @run AND NOT valid;
 -- conflict 범주 (PathReplanned 제외)
 SELECT s.event_id FROM sent s
 WHERE s.category = 'conflict' AND s.event_type <> 'PathReplanned'
-  AND NOT EXISTS (SELECT 1 FROM conflict_log c WHERE c.event_id = s.event_id);
+  AND NOT EXISTS (SELECT 1 FROM conflict_log c WHERE c.event_id = s.event_id AND c.run_id = s.run_id);
 -- telemetry: 누락 수만
 SELECT count(*) FROM sent s
 WHERE s.category = 'telemetry'
   AND NOT EXISTS (SELECT 1 FROM robot_telemetry r
-                  WHERE r.map_id = @map AND r.robot_id = s.key AND r.tick = s.tick);
+                  WHERE r.run_id = s.run_id AND r.robot_id = s.key AND r.tick = s.tick);
 ```
+
+> **`run_id` 조건이 없으면 거짓 양성이 난다** — `tick`이 run마다 0부터 다시 시작하므로 이전 run의 행을 이번 run의
+> 적재로 착각하거나, 반대로 누락으로 센다. 송신 집합은 이미 run별 파일로 갈라져 있다.
 
 | 출력 | 출처 |
 |---|---|
@@ -553,6 +568,10 @@ WHERE s.category = 'telemetry'
 | R-01 · R-05 | 셋 다 | 실제 명부로 `p % N == rank`, 2회 연속일 때만 적용 |
 | R-04 | 셋 다 | 로봇 40대 × 140단계 상태 전이, 합류 · 탈퇴 재배정 → invalid 0 |
 | R-07 | Rabbit · Pg | 명부 없음 → 단일 워커가 16 파티션 전부 |
+| **R-run-01** | Pg | 같은 `robotId`가 run A · B에 각각 적재되고 `robot_state`가 **run별로 분리**된다. run B 첫 전이에서 `invalid` 0 |
+| **R-run-02** | Pg | 같은 `taskId`가 run A(Completed) · B(Pending)에 존재하고, B가 **단조 upsert에 막히지 않는다** |
+| **R-run-03** | Pg | `SimulationStarted`보다 telemetry가 먼저 도착해도 적재 성공(FK 없음), 이후 메타가 채워진다 |
+| **R-run-04** | Pg | Reconcile 차집합이 **run 경계를 넘지 않는다**(run A의 이벤트를 run B 누락으로 세지 않는다) |
 | S-01 · S-02 · S-06 | 셋 다 | 실제 IngestApi가 503(다른 인스턴스 pending)을 주는 동안 다음 배치를 보내지 않고, 같은 batchId로 재전송, 송신 로그는 202 뒤에만 |
 | E2E | 셋 다 | Simulator(20대 · 600틱) → HTTP IngestApi → RabbitMQ → 워커(300틱에 kill → 교대) → PostgreSQL → Reconcile 질의: task · conflict · telemetry 누락 0, invalid 0, task_history 중복 0 |
 
@@ -825,7 +844,7 @@ public static class StatusTransitions
 
 | 파일 | 내용 |
 |---|---|
-| `db/migrations/001_schema.sql` | 01 PostgreSQL 테이블 그대로(`robot_telemetry` 파티션 부모 · `task_history` · `conflict_log` · `metrics_minute` · 유니크 인덱스). 날짜 파티션은 만들지 않는다 |
+| `db/migrations/001_schema.sql` | 01 PostgreSQL 테이블 그대로 — **`simulations`와 모든 `run_id` 컬럼 · 키, `replan_log` · `run_metrics`, 기준정보 7개 테이블이 `001`에 포함된다. 별도 마이그레이션을 만들지 않는다.** 날짜 파티션은 만들지 않는다 |
 | `db/migrations/002_logs_and_state.sql` | 아래 DDL |
 | `db/migrations/003_partitions.sql` | 파티션 함수 + DEFAULT 파티션 |
 | `src/Infrastructure.Postgres/RobotFleet.Infrastructure.Postgres.csproj` | `Npgsql`, `Microsoft.Extensions.Logging.Abstractions`, Shared 참조. `../../db/migrations/*.sql`을 `migrations/`로 출력 복사 |
@@ -838,17 +857,20 @@ public static class StatusTransitions
 -- 002_logs_and_state.sql
 CREATE TABLE task_event_log (
     event_id    TEXT PRIMARY KEY,
-    map_id      TEXT NOT NULL,
+    run_id      TEXT NOT NULL,
+    map_code    TEXT NOT NULL,
     task_id     TEXT NOT NULL,
     event_type  TEXT NOT NULL,
     tick        BIGINT NOT NULL,
     occurred_at TIMESTAMPTZ NOT NULL
 );
 CREATE INDEX ix_task_event_log_task ON task_event_log (task_id);
+CREATE INDEX ix_task_event_log_run ON task_event_log (run_id);
 
 CREATE TABLE robot_status_log (
     event_id    TEXT PRIMARY KEY,
-    map_id      TEXT NOT NULL,
+    run_id      TEXT NOT NULL,
+    map_code    TEXT NOT NULL,
     robot_id    TEXT NOT NULL,
     tick        BIGINT NOT NULL,
     from_status SMALLINT NOT NULL,
@@ -857,15 +879,17 @@ CREATE TABLE robot_status_log (
     valid       BOOLEAN NOT NULL,          -- 전이 검증 결과 (10 §6)
     occurred_at TIMESTAMPTZ NOT NULL
 );
-CREATE INDEX ix_robot_status_log_invalid ON robot_status_log (map_id) WHERE NOT valid;
+CREATE INDEX ix_robot_status_log_run ON robot_status_log (run_id);
+CREATE INDEX ix_robot_status_log_invalid ON robot_status_log (run_id) WHERE NOT valid;
 
 CREATE TABLE robot_state (
-    map_id        TEXT NOT NULL,
+    run_id        TEXT NOT NULL,
     robot_id      TEXT NOT NULL,
+    map_code      TEXT NOT NULL,
     status        SMALLINT NOT NULL,
     last_tick     BIGINT NOT NULL,
     last_event_id TEXT NOT NULL,
-    PRIMARY KEY (map_id, robot_id)
+    PRIMARY KEY (run_id, robot_id)
 );
 
 -- 003_partitions.sql
