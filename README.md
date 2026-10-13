@@ -137,14 +137,14 @@ Simulator ──(틱마다 배치 이동 요청)──► FleetController ◄─
 
 ## 배포 환경 (예정)
 
-로컬 VM 3대에 k3s를 올린다. M7 부하 실험만 AWS에서 한다. 아래 주소는 예시다.
+자체 서버 또는 클라우드에 k3s 노드 3대로 구성한다. 아래 주소는 예시다.
 
 <a href="https://raw.githubusercontent.com/hyunpaper/robot-fleet/main/docs/images/deployment-ha.svg"><img src="docs/images/deployment-ha.svg" alt="배포 구성"></a>
 
 | 노드 | 주소 | 역할 |
 |---|---|---|
-| node-1 | 192.168.10.11 | k3s server, 애플리케이션, PostgreSQL, Redis·Sentinel·RabbitMQ 멤버 |
-| node-2 | 192.168.10.12 | 애플리케이션, Redis·Sentinel·RabbitMQ 멤버 |
-| node-3 | 192.168.10.13 | 애플리케이션, 모니터링, Redis·Sentinel·RabbitMQ 멤버 |
+| node-1 | 10.0.1.11 | k3s server, 애플리케이션, PostgreSQL, Redis·Sentinel·RabbitMQ 멤버 |
+| node-2 | 10.0.2.12 | 애플리케이션, Redis·Sentinel·RabbitMQ 멤버 |
+| node-3 | 10.0.2.13 | 애플리케이션, 모니터링(실험 시), Redis·Sentinel·RabbitMQ 멤버 |
 
-노드는 2 vCPU·8GiB씩이다. Redis(primary 1 + replica 2 + Sentinel 3)와 RabbitMQ(3노드, quorum queue)는 세 노드에 분산된다. 자세한 내용은 07, 08 문서 참고.
+노드는 기본 4GiB·2 vCPU, 실험 시 8GiB·4 vCPU다. Redis(primary 1 + replica 2 + Sentinel 3)와 RabbitMQ(3노드, quorum queue)는 세 노드에 분산된다. 자세한 내용은 07, 08 문서 참고.

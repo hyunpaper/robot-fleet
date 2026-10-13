@@ -93,15 +93,15 @@
 |---|---|---|
 | node-1 | server (taint 없음) | 애플리케이션, PostgreSQL, Redis · Sentinel · RabbitMQ 멤버 |
 | node-2 | agent | 애플리케이션, Redis · Sentinel · RabbitMQ 멤버 |
-| node-3 | agent | 애플리케이션, 모니터링, Redis · Sentinel · RabbitMQ 멤버 |
+| node-3 | agent | 애플리케이션, 모니터링(실험 시), Redis · Sentinel · RabbitMQ 멤버 |
 
 control plane을 따로 두지 않는 이유 — 데이터 계층 과반이 어차피 데이터 멤버가 있는 노드 3대로 닫힌다.
-전용 control plane은 메모리를 쓰면서 워크로드를 받지 않아 순수 낭비다. node-1이 server를 겸하되,
+전용 control plane은 2GB를 쓰면서 워크로드를 받지 않아 순수 낭비다. node-1이 server를 겸하되,
 node-1 장애 시 API 서버가 함께 내려간다는 제약을 받아들인다 — 기동 중인 pod는 유지되고
 스케줄링 · 재배치만 멈춘다. drain 시연은 node-2 또는 node-3을 대상으로 한다.
 
-실행 환경은 집 PC의 VMware VM 3대(`192.168.10.11~13`, 고정 IP)다. M7 부하 실험만 AWS에서 하고,
-어느 쪽이든 매니지드 데이터 서비스는 쓰지 않는다 — Sentinel 장애 조치 · quorum 재선출 · 해시 체인이 이 프로젝트의 본체다. 상세는 02.
+실행 환경(로컬 VM 기본, M7 부하 실험만 AWS)과 노드 주소는 02. 어느 쪽이든 매니지드 데이터 서비스는 쓰지 않는다 —
+Sentinel 장애 조치 · quorum 재선출 · 해시 체인이 이 프로젝트의 본체다.
 
 ### 데이터 계층 배치 — 3노드 분산
 
@@ -113,14 +113,14 @@ node-1 장애 시 API 서버가 함께 내려간다는 제약을 받아들인다
 | PostgreSQL ×1 | node-1 고정 + local PV(Retain) | 범위 밖. 단일 유지 |
 | FleetController ×2 | 서로 다른 노드, preferred anti-affinity | 노드 장애에 둘 다 죽지 않게 |
 | Simulator ×1 | **node-1을 피한다** (required nodeAffinity `NotIn node-1`), node-2 · 3 중 어디든 | node-1에는 이미 k3s server · PostgreSQL이 있다. Simulator까지 두면 node-1 장애 때 틱이 멈추고 API 서버도 함께 내려가 재배치조차 안 된다. node-2 · 3에 두면 그 노드가 죽어도 API 서버가 살아 있어 다른 노드로 재시작된다(새 epoch, 범위 밖 항목 그대로) |
-| 나머지 애플리케이션 · 모니터링 | 세 노드 모두 허용 | "node-2 / node-3만" 제한 폐기. 모니터링은 상시 |
+| 나머지 애플리케이션 · 모니터링 | 세 노드 모두 허용 | "node-2 / node-3만" 제한 폐기 |
 
 Redis · RabbitMQ 멤버는 세 노드 전부에 있고, 노드별 차이는 k3s server · PostgreSQL · 모니터링이 어디에 붙느냐뿐이다.
 노드명은 `--node-name node-1~3`으로 고정한다 — local PV의 `nodeAffinity`가 노드명에 묶이므로 VM을 다시 만들어도 PV가 따라와야 한다.
 
 | 노드 | 사양 | 근거 |
 |---|---|---|
-| node-1~3 | 각 **2 vCPU · 8GiB** | 시스템 예약 0.6Gi를 뺀 7.4Gi에 request 합 6.16Gi(모니터링 포함), 노드당 2.3Gi 안팎. 1대가 빠져도 남은 2대에 앱 pod 전부 재배치되고 노드당 3Gi를 넘지 않는다. 제약은 메모리가 아니라 **CPU**(호스트 6코어) — EventWorker HPA 상한 3의 이유. 노드별 수치는 08 §11 |
+| node-1~3 | 기본 4GiB (2 vCPU) / 실험 8GiB (4 vCPU) | 시스템 예약 0.6Gi를 뺀 3.4Gi에 request 최대 2.2Gi. 1대가 빠져도 남은 2대에 앱 pod 전부 재배치, 노드당 2.0~2.3Gi (08 §11) |
 
 ---
 
@@ -165,7 +165,7 @@ Redis · RabbitMQ 멤버는 세 노드 전부에 있고, 노드별 차이는 k3s
 | 8 | quorum queue 설정 | 32 quorum + 16 classic. leader 분산, publisher confirm, SAC, delivery limit + DLQ, 메모리 상한 | §8 |
 | 9 | 01 멱등 2단계 수정 | telemetry 실패는 drop + 메트릭, task · conflict만 503. Redis 오류 시 멱등 1단계 fail-open | §9 |
 | 10 | StatefulSet · anti-affinity · local PV | 데이터 멤버 노드당 1 (required), FleetController preferred, PostgreSQL node-1, taint 없음, 노드명 고정 | §10 |
-| 11 | 리소스 표 (02) | 노드 8GiB 기준 request 합 6.16Gi, limit = request × 2, 노드 1대 장애 시 재배치 가능. HPA 상한은 CPU로 결정 | §11 |
+| 11 | 리소스 표 (02) | 기본(4GiB) 5.41Gi / 실험(8GiB) 6.16Gi 두 구성, limit = request × 2, 노드 1대 장애 시 재배치 가능. HPA 상한은 CPU로 결정 | §11 |
 | 12 | M8 장애 주입 시나리오 (02) | Redis primary · Sentinel · RabbitMQ leader · FleetController 처리 중 · drain(node-2 · 3) · node-1(API 서버) 장애 · 노드 강제 소실. 시나리오마다 확인 사항 · 지표 · 합격 기준 | §12 |
 | 13 | 배포 구성도 갱신 | 노드 3대 구성 | §13 |
 
@@ -185,7 +185,7 @@ Redis · RabbitMQ 멤버는 세 노드 전부에 있고, 노드별 차이는 k3s
 | 사용자 확정 | 장애 조치 중 틱 정지 허용 상한 30초 | 이 값이 Sentinel 설정의 상한을 정한다 |
 | 사용자 확정 | worker 메모리 6GiB × 3, cp-1 2 vCPU · 2GB | 08 §11 리소스 표의 기준 |
 | 사용자 확인 필요 | worker CPU 4 vCPU | 08의 가정. request 합 최대 6.15 core가 worker 1대 장애 후 8 vCPU 안에 든다는 계산의 전제 |
-| 사용자 확정 (갱신) | 노드 구성 cp-1 + worker-1~3 → **node-1~3 (3대)** | 전용 control plane 제거. 과반 구성 동일, node-1이 k3s server 겸임 (위 "노드 구성", 02) |
-| 사용자 확정 (갱신) | worker 6GiB × 3 + cp-1 2GB, CPU 4 vCPU 가정 → **2 vCPU · 8GiB × 3** | 로컬 호스트 64GB · 6코어. 모니터링 상시 유지. CPU가 유일한 제약이라 EventWorker HPA 상한 3. 08 §11 리소스 표가 기준 |
+| 사용자 확정 (갱신) | 노드 구성 cp-1 + worker-1~3 → **node-1~3 (3대)** | 전용 control plane 제거. 과반 구성 동일, node-1이 server 겸임 (위 "노드 구성", 02) |
+| 사용자 확정 (갱신) | worker 6GiB × 3 + cp-1 2GB → **2 vCPU · 8GiB × 3** | 로컬 호스트 64GB. 모니터링 상시 유지. 08 §11 리소스 표가 기준 |
 | 사용자 확정 (갱신) | 자체 리눅스 서버 → **집 PC VMware VM 3대** (M7 부하 실험만 AWS) | 매니지드 데이터 서비스는 계속 쓰지 않는다. 02 환경 절 |
 | 총괄 결정 | Simulator는 node-1을 피한다 | k3s server · PostgreSQL과 같은 노드에 두면 node-1 장애가 "틱 정지 + 재배치 불가"가 된다. node-2 · 3에 두면 node-1 장애에도 틱이 이어지고, node-2 · 3 장애는 재시작(새 epoch)으로 끝난다. 08 §10 · §11 배치 · 수치 갱신 |
