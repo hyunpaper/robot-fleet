@@ -189,3 +189,5 @@ Redis · RabbitMQ 멤버는 세 노드 전부에 있고, 노드별 차이는 k3s
 | 사용자 확정 (갱신) | worker 6GiB × 3 + cp-1 2GB → **기본 4GiB (2 vCPU) / 실험 8GiB (4 vCPU)** × 3 | 로컬 호스트 64GB. 모니터링은 실험 시. 08 §11 리소스 표가 기준 |
 | 사용자 확정 (갱신) | 자체 리눅스 서버 → **집 PC VMware VM 3대** (M7 부하 실험만 AWS) | 매니지드 데이터 서비스는 계속 쓰지 않는다. 02 환경 절 |
 | 총괄 결정 | Simulator는 node-1을 피한다 | k3s server · PostgreSQL과 같은 노드에 두면 node-1 장애가 "틱 정지 + 재배치 불가"가 된다. node-2 · 3에 두면 node-1 장애에도 틱이 이어지고, node-2 · 3 장애는 재시작(새 epoch)으로 끝난다. 08 §10 · §11 배치 · 수치 갱신 |
+| 사용자 확정 (갱신) | worker CPU 4 vCPU (위 "확인 필요") → **노드 4 vCPU · 8GiB × 3 = 12 vCPU, 호스트 6코어 오버커밋 수용** | 실제 시뮬레이터까지 문제없이 돌리는 것이 기준. 기능 · 장애 테스트 용도라 오버커밋을 받아들이고, 성능 수치는 M7 AWS에서 낸다 |
+| 사용자 확정 | 운영 구성 | M3 · M4: 인프라 VM 1대(192.168.10.11, Ubuntu 24.04, 4 vCPU · 8GB, RabbitMQ · Redis · PostgreSQL 16) + Windows PC에서 Simulator · 앱 실행. M5부터: k3s node-1~3을 처음부터 실험 구성(4 vCPU · 8GiB × 3)으로 상시 운영 |
