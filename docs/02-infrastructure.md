@@ -2,57 +2,166 @@
 
 ## 환경
 
-- 자체 리눅스 서버 (클라우드 미사용)
+- **집 PC VMware VM 3대**(M5 · M6 · M8 · M9). **M7 부하 실험만 AWS**
+- **매니지드 데이터 서비스(RDS · ElastiCache · Amazon MQ)를 쓰지 않는다.** 로컬 VM이든 EC2든 직접 운영한다 —
+  매니지드를 쓰면 Sentinel 장애 조치 · quorum 재선출 · 해시 체인이 의미를 잃고 M5~M8이 사라진다
 - 쿠버네티스 배포판: **k3s**
 - 인그레스: nginx ingress controller (k3s 기본 Traefik 비활성화)
+
+### 단계별 실행 환경
+
+| 단계 | 어디서 | Redis | Sentinel | RabbitMQ | 비용 |
+|---|---|---|---|---|---|
+| **M3 · M4** | **k3s 불필요** — 사용자가 제공한 단일 인프라 서버(RabbitMQ · Redis · PostgreSQL). 접속 정보는 appsettings(10 §9) | 1 | 없음 | 1 (quorum 타입, 멤버 1) | 0원 |
+| **M5 · M6 · M8 · M9** | 집 PC — **VMware VM 3대 k3s** | 3 | 3 | 3 (멤버 3으로 `grow`) | 전기료 |
+| **M6 추가** | 실시간 관제 화면 **+ run 재생 데이터 내보내기 · 정적 재생기**(아래 "외부 공개") | | | | 0원 |
+| **M7 부하 실험** | **AWS** (아래 "M7 — AWS"). **run 전환 기능(`POST /admin/run`)이 선결**(아래 "run 관리") | 3 | 3 | 3 | 회당 $1~2 |
+| **M9 교착 분석 에이전트** | 집 PC 호스트(클러스터 밖) — 로컬 LLM이 **정책 파라미터 수정안**을 근거와 함께 제시(04 "M9 교착 분석 에이전트의 액션 공간") | | | | 0원 |
+
+> 인프라 서버에는 `rabbitmq_consistent_hash_exchange` 플러그인이 켜져 있어야 한다. 없으면 기동이 실패한다(10 §3).
+
+| 왜 로컬이 기본인가 | 로컬 VMware | AWS |
+|---|---|---|
+| 세션 전환 | **suspend / resume** — 상태 그대로 | destroy → 재생성 → 덤프 복원 |
+| IP | **고정** | 매번 변경 |
+| 메모리 | **8GiB × 3**, 모니터링 상시 | 비용 때문에 빠듯 |
+| M8 반복 실험 | **VM 스냅샷으로 같은 상태 재현** | 매번 재구축, 조건이 미세하게 달라짐 |
+| CPU | **6코어 — M7의 제약** | 필요한 만큼 |
+
+### 로컬 VM
+
+| 항목 | 값 | 비고 |
+|---|---|---|
+| 호스트 | Ryzen 5 3500X **6코어 6스레드** · RAM **64GB** | VM에 6 vCPU — 여유 없음. RAM은 VM 24GB, 호스트 40GB |
+| GPU | GTX 1660 Super 6GB | **VM에 넘기지 않는다** — M9 로컬 LLM은 호스트에서 |
+| 디스크 | VM 100GB + 스냅샷 + suspend 파일 24GB | 200GB 이상 여유 |
+| 하이퍼바이저 | VMware Workstation Pro | 스냅샷 · suspend. WSL2 · Docker Desktop을 켜면 Hyper-V가 켜져 성능이 떨어진다 |
+| 네트워크 | **NAT(`vmnet8`) 하나**, DHCP 범위 밖 주소를 게스트에서 static — `192.168.10.11~13` | 대역은 `Virtual Network Editor`에서 확인해 맞춘다 |
+| 세션 | 저녁 resume → 작업 → suspend. M8 장애 주입 전에는 **스냅샷** | 전원을 내릴 때는 node-2 · 3 → node-1 순 |
+| 백업 | **VM 스냅샷 + 정기 `pg_dump`** | 인스턴스가 사라지지 않으므로 덤프 · 복원 스크립트가 필요 없다 |
+
+### M7 — AWS
+
+05 실험 1의 결론은 "이 맵에서 로봇 N대가 최적"인데, 호스트가 6코어뿐이라 틱 초과가 **알고리즘 한계인지 하드웨어 한계인지**
+구분되지 않는다. 그 N이 맵 특성이 아니라 PC 사양이 된다. 나머지 단계는 CPU 부하가 아니라 구조와 동작을 보므로 로컬로 충분하고,
+M8은 스냅샷 반복이 되는 로컬이 오히려 낫다.
+
+| 항목 | 값 | 근거 |
+|---|---|---|
+| 인스턴스 | `c7g.xlarge` × 3 (4 vCPU · 8GiB) **온디맨드** | Spot 회수가 측정을 오염시키면 안 된다. 버스터블(`t4g`)은 CPU 크레딧에 따라 성능이 흔들린다 |
+| 리전 · 배치 | 서울, 노드 3대 **같은 서브넷** | 노드 간 텔레메트리 전송이 무료인 범위에 둔다 |
+| 운용 | `terraform apply` → 실험 → **`terraform destroy`** (`deploy/terraform/`, M7 전용) | EBS는 인스턴스를 꺼도 과금된다. 결과(덤프 · 보고서 · Grafana 스냅샷)를 먼저 회수 |
+| 노드명 · 매니페스트 | 로컬과 **같은 매니페스트**, `--node-name node-1~3` 필수 | 노드 생성만 Terraform이 맡는다 |
+| ⚠️ 선결 | 신규 계정 vCPU 한도 **5** — 12가 필요하므로 **Service Quotas 증액 신청**(서울, 온디맨드 · Spot 각각) | 수 시간~며칠 걸린다 |
+| 크레딧 | $200 / 6개월. 구 프리티어(750h EC2 · 30GB EBS)는 없다 | M7 몇 회면 $10도 쓰지 않는다 |
+| 환경 구분 | `simulations.environment` = `local` / `aws` (01 · 03) | 하드웨어가 바뀌면 다른 조건이다(05 "동일 조건에서 변수 하나만") |
+
+### 외부 공개 — 재생기와 실시간
+
+실시간 관제를 인터넷에 상시로 열지 않는다. **주력은 재생기**다.
+
+| | 기록 재생 (주력) | 실시간 (데모용) |
+|---|---|---|
+| 형태 | run 종료 후 내보낸 데이터를 **GitHub Pages 정적 재생기**(`docs/viewer/`)로 | **Cloudflare Tunnel** — 발표 · 시연 때만 |
+| 데이터 | QueryApi `GET /api/v1/runs/{runId}/replay`(M6)가 `simulations` + `robot_telemetry`를 압축 포맷으로 | WebSocket 스트림 |
+| PC 전원 | 꺼져 있어도 된다, 24/7 | 켜져 있어야 한다 |
+| 비용 · 보안 | 무료 · 클러스터 노출 없음 | 무료 · 아웃바운드 연결만, Cloudflare Access로 접근 제어 |
+
+재생기 기능: 재생 · 일시정지 · 배속 · 틱 점프, **run 비교 재생**(`runId`가 전제), 교착 · 장애 주입 시점 북마크.
+크기: 2분 · 로봇 200대 · 10틱/초면 약 1.4MB(초당 1틱 샘플링이면 140KB).
+
+| 노출 금지 | 이유 |
+|---|---|
+| 6443 (kubectl) | 클러스터 전체 권한 |
+| **Simulator `POST /admin/run`** | 로봇 수 · 배속을 아무나 바꿀 수 있다 |
+| Grafana 편집 | 익명 읽기 전용으로 두거나 노출하지 않는다. 실험 보고서에는 스냅샷 · 스크린샷을 첨부 |
+| RabbitMQ 관리 플러그인 · PostgreSQL · Redis | |
+
+**QueryApi 조회 + WebSocket, nginx ingress 80/443만** 터널에 올린다.
+
+### run 관리 — 로봇 수 변경과 배속
+
+M7 실험(로봇 수 8종 × 3회 = 24 run)과 관제 화면 조작이 모두 **"새 run을 시작한다"**는 같은 동작이다.
+배속은 이미 있다(`--speed`, `--speed 0` = 대기 없음, `--tick`, `ITickDelay` — 06).
+
+```
+POST /admin/run            (Simulator 관리 포트 — 인그레스 · 터널에 올리지 않는다, 10 D5)
+{ "robots": 200, "speed": 1.0, "tickMs": 100, "taskSeed": 20261013 }
+```
+
+| 순서 | 동작 | 빠뜨리면 |
+|---|---|---|
+| 1 | 틱 루프 정지 | — |
+| 2 | **송신 버퍼 Drain** | 이전 run 이벤트 **유실** |
+| 3 | `SimulationEnded` 발행 (03) | `simulations` 종료 통계 공백 |
+| 4 | **Redis 맵 해시 초기화 + epoch 증가** (04 · 08) | 이전 run이 점유한 칸이 남아 새 run이 즉시 교착 |
+| 5 | 새 `runId` 발급 (03) | run이 섞인다 |
+| 6 | `SimulationStarted` 발행 → 로봇 N대 생성 → 틱 루프 시작 | — |
+
+| 결정 | 근거 |
+|---|---|
+| Simulator 관리 엔드포인트(채택) | EventWorker가 이미 관리 포트를 가진다(10 D5). pod 재시작 없이 전환하고 Drain을 깔끔히 처리한다. ConfigMap + `rollout restart`는 QueryApi에 클러스터 RBAC을 줘야 한다 |
+| **선결: run 식별자(01 · 03 · 10)** | 먼저 넣으면 `robot_state`가 run을 못 가려 전체 로봇이 `valid=false`, `task_history`는 조용히 오염된다 |
+| 선결: 04 설정값 외부화 | `POST /admin/run`이 `params`를 받아 `SimulationStarted`에 싣는다 |
+| 구현 시점 | M6 또는 M7 진입. 그 전까지는 `--robots N` CLI 재시작으로 충분하다 |
 
 ---
 
 ## k3s 설치
 
+노드 3대를 **동일 사양**으로 두고, node-1이 k3s server를 겸한다(**taint 없음**).
+
 ```bash
+# node-1 (server) — taint 없음
 curl -sfL https://get.k3s.io | sh -s - \
-  --disable traefik \
-  --disable servicelb \
-  --write-kubeconfig-mode 644
+  --node-name node-1 \
+  --disable traefik --disable servicelb \
+  --write-kubeconfig-mode 644 \
+  --tls-san 192.168.10.11 \
+  --token "<k3s_token>" \
+  --kubelet-arg=system-reserved=memory=600Mi
+
+# node-2 · node-3 (agent)
+curl -sfL https://get.k3s.io | K3S_URL=https://192.168.10.11:6443 \
+  K3S_TOKEN=<k3s_token> sh -s - \
+  --node-name node-2 \
+  --kubelet-arg=system-reserved=memory=600Mi
+
+kubectl label node node-1 fleet/pg=true
 ```
 
 | 옵션 | 이유 |
 |---|---|
+| `--node-name node-1` / `node-2` / `node-3` | **빠뜨리면 게스트 호스트명이 노드명이 되어, VM을 다시 만들었을 때 local PV의 `nodeAffinity`가 맞지 않고 PV가 영원히 Pending된다** |
 | `--disable traefik` | nginx ingress를 직접 설치 — 현업 환경과 맞춤 |
 | `--disable servicelb` | MetalLB 또는 NodePort 사용 |
 | `--write-kubeconfig-mode 644` | sudo 없이 kubectl 사용 |
+| `--tls-san 192.168.10.11` | IP가 고정이라 한 줄이면 된다. kubeconfig도 한 번 받으면 계속 쓴다 |
+| `system-reserved=memory=600Mi` | 노드별 allocatable 7.4Gi |
 
 ### 노드 구성
 
 | 구성 | 조건 | 비고 |
 |---|---|---|
-| 단일 노드 | 서버 1대 | 시작 가능(M3~M4). pod 스케일 아웃 시연은 됨 |
-| **cp-1 + worker 3** | 4대 (VM 가능) | **권장(M5~)** — Redis Sentinel·RabbitMQ quorum의 과반 합의에 worker 3대가 필요하다. control plane은 워크로드와 분리 (07) |
+| 단일 노드 | 서버 1대 | **M3 · M4는 k3s 자체가 불필요** — 사용자가 제공한 단일 인프라 서버(RabbitMQ · Redis · PostgreSQL), 접속 정보는 appsettings(10 §9). **k3s는 M5부터** |
+| **노드 3** | 3대(동일 사양) | **권장(M5~)** — Redis Sentinel · RabbitMQ quorum의 과반 합의에 서로 다른 노드의 투표자 3이 필요하다. 2대면 1개 손실 시 과반을 못 채운다 |
 
-| 노드 | 주소(예시) | 역할 |
-|---|---|---|
-| cp-1 | 192.168.10.10 | k3s server 전용. taint로 워크로드 배제 |
-| worker-1 | 192.168.10.11 | 애플리케이션 · PostgreSQL · Redis/Sentinel/RabbitMQ 멤버 |
-| worker-2 | 192.168.10.12 | 애플리케이션 · Redis/Sentinel/RabbitMQ 멤버 |
-| worker-3 | 192.168.10.13 | 애플리케이션 · 모니터링 · Redis/Sentinel/RabbitMQ 멤버 |
+| 노드 | k3s | 레이블 | 고정 IP | vCPU | RAM | 디스크 |
+|---|---|---|---|---|---|---|
+| node-1 | **server** | `fleet/pg=true` | `192.168.10.11` | 2 | **8GiB** | 40GB |
+| node-2 | agent | — | `192.168.10.12` | 2 | **8GiB** | 30GB |
+| node-3 | agent | — | `192.168.10.13` | 2 | **8GiB** | 30GB |
+| **합** | | | | **6** | **24GB** | **100GB** |
 
-```bash
-# cp-1 (server) — 워크로드를 받지 않는다
-curl -sfL https://get.k3s.io | sh -s - --disable traefik --disable servicelb \
-  --node-taint node-role.kubernetes.io/control-plane=true:NoSchedule
+| 결정 | 근거 |
+|---|---|
+| 전용 control plane을 두지 않는다 | 2GB를 쓰면서 워크로드를 받지 않는 전용 노드는 순수 낭비다. 과반은 어차피 데이터 멤버가 있는 3대로 닫힌다 |
+| **CPU가 유일한 제약** | 메모리는 24GB를 써도 호스트에 40GB가 남지만 호스트가 6코어 6스레드(SMT 없음)다. CPU request 합 4.65 core가 6 vCPU 안에 들어가지만 여유가 1.35 core뿐이다 |
+| 노드당 **2 vCPU** | 3대 × 2 = 6으로 물리 코어와 1:1. 오버커밋하면 호스트가 굶는다 |
+| 메모리 8GiB | 로컬에서는 줄일 이유가 없고, **모니터링을 상시 켤 수 있다** |
+| node-1 장애 시 | API 서버가 함께 내려간다 — 기동 중인 pod는 유지, 스케줄링 · 재배치만 정지(08 §10) |
 
-# worker-1~3 (agent) — cp-1에서 토큰 확인
-sudo cat /var/lib/rancher/k3s/server/node-token
-
-curl -sfL https://get.k3s.io | K3S_URL=https://192.168.10.10:6443 \
-  K3S_TOKEN=<token> sh -s - --kubelet-arg=system-reserved=memory=600Mi
-
-# PostgreSQL 고정 레이블
-kubectl label node worker-1 fleet/pg=true
-```
-
-노드 사양과 배치 근거는 08 §10.
+배치와 1대 장애 시 재배치는 08 §10 · §11.
 
 ---
 
@@ -91,37 +200,48 @@ ingress-nginx nginx ingress controller
 
 | 컴포넌트 | CPU | Memory request | 비고 |
 |---|---|---|---|
-| Prometheus | 300m | 1Gi | 보존 기간 7일 기준 |
+| Prometheus | 300m | 512Mi | 보존 7일 기준. 메모리는 활성 시계열 수에 비례하고, 보존은 디스크가 감당한다 |
 | Grafana | 100m | 256Mi | |
 
 ### 고가용성 구성 (M5 + M6)
 
-worker 1대 4 vCPU · 6GiB × 3. cp-1(2 vCPU · 2GB)은 워크로드가 없어 표에서 뺀다. worker별 배치와 1대 장애 시 재배치 계산은 08 §11.
+로컬 VM이라 **구성이 하나뿐이다.** 모니터링도 상시 띄운다.
 
-| 컴포넌트 | replicas | CPU request | Memory request | Memory limit | 합계 request |
+| 컴포넌트 | replicas | CPU req | Mem req | Mem limit | 합계 |
 |---|---|---|---|---|---|
-| Simulator | 1 | 500m | 512Mi | 1Gi | 512Mi |
+| Simulator | 1 (Recreate) | 500m | 512Mi | 1Gi | 512Mi |
 | FleetController | 2 | 200m | 256Mi | 512Mi | 512Mi |
 | IngestApi | 2 | 200m | 256Mi | 512Mi | 512Mi |
-| EventWorker | 2 (HPA ~8) | 300m | 256Mi | 512Mi | 512Mi (최대 2Gi) |
+| EventWorker | 2 (HPA **~3**) | 300m | 256Mi | 512Mi | 768Mi |
 | QueryApi | 1 | 100m | 192Mi | 384Mi | 192Mi |
 | Redis | 3 | 100m | 256Mi | 512Mi | 768Mi |
 | Sentinel | 3 | 50m | 32Mi | 64Mi | 96Mi |
 | RabbitMQ | 3 | 300m | 512Mi | 1Gi | 1.5Gi |
 | PostgreSQL | 1 | 500m | 512Mi | 1Gi | 512Mi |
 | nginx ingress | 1 | 100m | 128Mi | 256Mi | 128Mi |
-| Prometheus | 1 | 300m | 1Gi | 2Gi | 1Gi |
+| Prometheus | 1 (보존 7일) | 300m | 512Mi | 1Gi | 512Mi |
 | Grafana | 1 | 100m | 256Mi | 512Mi | 256Mi |
-| **합계** | | **4.35 core (최대 6.15)** | | | **6.4Gi (EventWorker 8대 시 7.9Gi)** |
+| **합계 (EventWorker 3)** | | **4.65 core** | | | **6.16Gi** |
 
-> request 합 8Gi 이하, limit = request × 2. worker마다 시스템 예약 600Mi를 빼면 allocatable 5.4Gi. 정상 시 worker별 request 최대 2.8Gi, worker 1대 장애 후에도 남은 2대에 애플리케이션 pod가 모두 재배치된다(최대 4.3Gi). Pending은 노드에 묶인 데이터 멤버 · PostgreSQL · Prometheus뿐 (08 §11).
+노드 allocatable = 8GiB − 600Mi = **7.4Gi**, 3대 합 **22.2Gi**. 노드별 request와 1대 장애 시 재배치는 08 §11.
+
+| 결정 | 근거 |
+|---|---|
+| **메모리 8GiB × 3** | 호스트 64GB 중 24GB만 쓰고 40GB가 남는다 |
+| **모니터링 상시** | 메모리 여유가 노드당 5Gi씩 있다. 실험 세션에만 켜는 분리가 필요 없다 |
+| Prometheus 보존 **7일** · **512Mi** | 보존 기간은 디스크가 감당한다. 메모리는 활성 시계열 수에 비례하므로 512Mi로 충분하다 |
+| EventWorker HPA 상한 **3** | **메모리가 아니라 CPU 때문이다.** 상한을 4로 올리면 CPU request가 4.95 core가 되어 1대 장애 시 남은 4 vCPU를 넘는다 |
+| limit = request × 2 유지 | .NET GC 특성(아래) |
+
+> **CPU가 유일한 병목이다.** request 합 4.65 core / 6 vCPU, 1대 장애 시 남은 **4 vCPU에 약 4.2 core**가 들어가 여유가 거의 없다.
+> EventWorker 증설분이 Pending될 수 있고 HPA 축소로 해소된다. **측정이 걸린 작업(M7)은 AWS에서 한다.**
 
 ### 서버 요구사항
 
-| 구성 | 메모리 | 가능 범위 |
+| 구성 | 사양 | 가능 범위 |
 |---|---|---|
 | 단일 노드 | 8GB | 최소 구성 + 모니터링. 데이터 계층 단일 인스턴스 |
-| **cp-1 + worker 3** | cp-1 2GB + **worker 6GiB × 3** | **고가용성 구성 + 모니터링 + 부하 시험** |
+| **노드 3** | **노드 3 × 8GiB (2 vCPU)** | **고가용성 구성 + 모니터링** (부하 실험은 M7 AWS) |
 
 > **limit을 request의 2배로 잡는 이유** — .NET은 GC 특성상 순간적으로 메모리를
 > 더 쓸 수 있다. limit이 request와 같으면 OOMKilled가 자주 발생한다.
@@ -200,10 +320,11 @@ k3s 기본 `local-path`는 노드 로컬 디렉터리를 쓴다. **노드가 바
 
 | 데이터 | 전략 |
 |---|---|
-| PostgreSQL | worker-1 고정(`nodeSelector: fleet/pg=true`) + local PV |
-| RabbitMQ | worker마다 1개, local PV `/data/rabbitmq` (08 §10) |
-| Redis | worker마다 1개, local PV `/data/redis`, AOF everysec. 정합성은 Simulator 재주장 (01·08) |
-| Sentinel | worker마다 1개, local PV `/data/sentinel` (설정 파일 재기록 보존) |
+| PostgreSQL | node-1 고정(`nodeSelector: fleet/pg=true`) + local PV |
+| RabbitMQ | 노드마다 1개, local PV `/data/rabbitmq` (08 §10) |
+| Redis | 노드마다 1개, local PV `/data/redis`, AOF everysec. 정합성은 Simulator 재주장 (01·08) |
+| Sentinel | 노드마다 1개, local PV `/data/sentinel` (설정 파일 재기록 보존) |
+| Prometheus | node-3 local-path PVC (보존 7일) |
 | MinIO | 용량 큰 디스크 경로 지정 |
 
 ```yaml
@@ -225,11 +346,14 @@ spec:
         - matchExpressions:
             - key: kubernetes.io/hostname
               operator: In
-              values: [worker-1]
+              values: [node-1]
 ```
 
 > `persistentVolumeReclaimPolicy: Retain`을 반드시 지정한다.
 > 기본값 `Delete`면 PVC를 지우는 순간 데이터가 날아간다.
+
+`nodeAffinity`가 노드명(`node-1`)을 가리키므로 **k3s 설치 시 `--node-name` 고정이 전제**다.
+로컬 VM이라 PV가 인스턴스와 함께 사라지지 않는다 — 백업은 **VM 스냅샷 + 정기 `pg_dump`**로 한다.
 
 ---
 
@@ -351,7 +475,7 @@ spec:
     kind: Deployment
     name: event-worker
   minReplicas: 2
-  maxReplicas: 8          # 파티션 수를 넘지 않게
+  maxReplicas: 3          # 파티션 수(16) 이하 · 노드 3대 × 2 vCPU의 CPU 예산
   metrics:
     - type: Resource
       resource:
@@ -361,6 +485,7 @@ spec:
 
 > **maxReplicas는 RabbitMQ 파티션 수(16)를 넘지 않게 설정한다.**
 > 파티션이 16개인데 워커를 32개 띄우면 16개는 아무 메시지도 못 받는다.
+> 3으로 낮춘 이유는 **메모리가 아니라 CPU**다 — 노드 3대 × 2 vCPU에서 상한 4면 1대 장애 시 남은 4 vCPU를 넘는다("리소스 배분").
 
 워커 수가 바뀔 때의 파티션 재배정(명부 기반 배정 + Single Active Consumer)은 01 "워커 수가 변할 때"를 따른다.
 HPA의 `stabilizationWindowSeconds`는 scaleDown 300초로 둔다. 재배정마다 소비자 취소·재구독이 일어나므로
@@ -373,7 +498,7 @@ HPA의 `stabilizationWindowSeconds`는 scaleDown 300초로 둔다. 재배정마�
 
 1. 로봇 50대 → 안정 상태 확인
 2. 로봇 200대로 증가 → 큐 적체 발생
-3. HPA가 워커를 2 → 6개로 증설
+3. HPA가 워커를 2 → 3개로 증설
 4. 적체 해소, 처리율 회복
 5. Grafana 그래프로 전 과정 기록
 
@@ -397,7 +522,12 @@ HPA의 `stabilizationWindowSeconds`는 scaleDown 300초로 둔다. 재배정마�
 | Sentinel 1 kill | `kubectl delete pod sentinel-N --force` | 장애 조치 없음, 판정 영향 없음, 재기동 후 Sentinel 3 복귀 | 틱 정지 시간, 판정 p99 | 틱 정지 0, p99 ≤ 10ms |
 | RabbitMQ leader 노드 kill | `rabbitmq-queues`로 리더 최다 노드 확인 → `kubectl delete pod rabbitmq-N --force` | quorum 리더 재선출, Ingest 503 → Simulator 순차 재전송, telemetry 파티션 일부 공백 | task · conflict 유실 수, 중복 수, telemetry 유실 수, Ingest 503 수, 리더 재선출 시간 | task · conflict 유실 0, 중복 0, 틱 정지 0 |
 | FleetController 1대 kill (배치 처리 중) | `FLEET_FAULT_KILL_AT=after-read · after-commit · before-response` 각 100회 + 무작위 `kubectl delete pod --force` 30분 | 재전송이 다른 인스턴스로 가고, 적용된 판정 = Redis 기록 (08 §4 표) | 틱 정지 시간, 재시도 수, 기록 반환 수, 다이제스트 불일치 수 | 불일치 0, `state_lost` 0, 틱 정지 ≤ 1초 |
-| worker drain | `kubectl drain worker-2 --ignore-daemonsets --delete-emptydir-data` → 10분 후 `uncordon` | PDB 준수, 그 worker의 Redis · Sentinel · RabbitMQ 멤버 이탈(primary · 리더였으면 장애 조치), 데이터 pod Pending → uncordon 후 재합류 | 틱 정지 시간, task · conflict 유실 수, telemetry 유실 수, 재합류 후 복제 완료 시간 | 틱 정지 ≤ 30초, task · conflict 유실 0 |
+| 노드 drain | `kubectl drain node-2 --ignore-daemonsets --delete-emptydir-data` → 10분 후 `uncordon` (대상은 **node-2 또는 node-3** — node-1은 API 서버) | PDB 준수, 그 노드의 Redis · Sentinel · RabbitMQ 멤버 이탈(primary · 리더였으면 장애 조치), 데이터 pod Pending → uncordon 후 재합류 | 틱 정지 시간, task · conflict 유실 수, telemetry 유실 수, 재합류 후 복제 완료 시간 | 틱 정지 ≤ 30초, task · conflict 유실 0 |
+| **node-1(API 서버) 장애** | node-1 VM 정지 | 기존 pod 계속 동작 · 스케줄링 · 재배치 정지 · `kubectl` 불가, 과반 2/3 유지 | 틱 정지 시간, 겹침 수 | 겹침 0, 틱 정지 ≤ 30초 |
+| **노드 강제 소실** | VM 전원 강제 차단(예고 없는 노드 소실). **스냅샷을 떠 두면 같은 상태에서 반복** | 과반 유지 여부, 데이터 pod Pending | 겹침 수, 틱 정지 시간 | 겹침 0, 틱 정지 ≤ 30초 |
+
+> 로컬 VM이라 **소실 시점을 통제할 수 있다.** 클라우드의 인스턴스 회수는 시점을 못 고르는 관측 항목이지만,
+> 전원 차단은 합격 / 불합격 판정이 가능한 시나리오가 된다.
 
 **각 시나리오마다 Grafana 스크린샷과 결과를 문서로 남긴다.**
 포트폴리오에서 "장애를 가정해 설계했다"의 근거가 된다.
@@ -406,7 +536,7 @@ HPA의 `stabilizationWindowSeconds`는 scaleDown 300초로 둔다. 재배정마�
 
 ## 이미지 빌드 · 배포
 
-로컬 레지스트리를 k3s에 등록한다.
+로컬 레지스트리를 k3s에 등록한다. 로컬 VM이라 레지스트리가 사라지지 않는다(M7 AWS도 같은 이미지를 쓴다).
 
 ```yaml
 # /etc/rancher/k3s/registries.yaml
