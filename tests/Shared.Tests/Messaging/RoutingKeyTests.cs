@@ -56,7 +56,8 @@ public class RoutingKeyTests
             act.Should().NotThrow(type);
             var category = EventCategories.Of(type);
             var key = RoutingKeys.Of(type, doc.RootElement, "m");
-            (category == EventCategory.Conflict ? key == "m" : key is "R" or "T").Should().BeTrue(type);
+            var byMapId = category == EventCategory.Conflict || type is EventType.SimulationStarted or EventType.SimulationEnded;
+            (byMapId ? key == "m" : key is "R" or "T").Should().BeTrue(type);
         }
     }
 }

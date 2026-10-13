@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace RobotFleet.Shared.Messaging;
 
 public sealed record CellDto(int X, int Y);
@@ -26,3 +28,10 @@ public sealed record PathReplannedPayload(string RobotId, string? TaskId, string
     int NewLength, double ComputeMs);
 
 public sealed record RobotStatusChangedPayload(string RobotId, int From, int To, string Reason);
+
+public sealed record SimulationStartedPayload(int Robots, double Speed, int TickMs, long TaskSeed,
+    string Environment, string LineCode, string MapId, int MapVersion, string MapHash, string TaskPatternCode,
+    Dictionary<string, JsonElement> Params);
+
+public sealed record SimulationEndedPayload(long Ticks, int TasksCreated, int TasksCompleted, int TasksFailed,
+    int Overruns, long StallMs, string Reason);

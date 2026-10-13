@@ -108,7 +108,7 @@ public sealed class FleetTests
     [Fact]
     public void E01_배치_안_순서()
     {
-        var c = new EventCollector("m", 100, TimeProvider.System);
+        var c = new EventCollector("m", "r1", 100, TimeProvider.System);
         c.Begin(1, DateTimeOffset.UnixEpoch);
         c.TaskCreated(new TransportTask { TaskId = "T-1", MapId = "m", Origin = new Point(1, 1), Destination = new Point(2, 2) });
         c.Status("R-2", RobotStatus.Idle, RobotStatus.Moving, "task_assigned");
@@ -144,7 +144,7 @@ public sealed class FleetTests
     [Fact]
     public void E03_1000건을_넘으면_순서를_지키며_자른다()
     {
-        var c = new EventCollector("m", 100, TimeProvider.System, maxPerBatch: 3);
+        var c = new EventCollector("m", "r1", 100, TimeProvider.System, maxPerBatch: 3);
         c.Begin(1, DateTimeOffset.UnixEpoch);
         var batches = c.Complete(Enumerable.Range(0, 7).Select(i => Tel($"R-{i}")));
         batches.Select(b => b.Events.Count).Should().Equal(3, 3, 1);
@@ -173,7 +173,7 @@ public sealed class FleetTests
     private static async Task<IReadOnlyList<EventItem>> SingleTaskAsync(Point origin, Point destination, Point robotAt)
     {
         var options = Options(1, 0, 10);
-        var collector = new EventCollector(Factory.MapId, options.TickMs, TimeProvider.System);
+        var collector = new EventCollector(Factory.MapId, options.RunId, options.TickMs, TimeProvider.System);
         var planner = new AStarPathPlanner();
         var lifecycle = new TaskLifecycle(Factory, planner, options, collector);
         var robot = new Robot { RobotId = "R-001", MapId = Factory.MapId, Position = robotAt, Heading = Heading.North };
