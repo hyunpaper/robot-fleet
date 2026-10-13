@@ -51,12 +51,12 @@ public sealed class ReconcileQueries : IReconcileQueries
                    avg(resolved_ms) FILTER (WHERE conflict_type = 3) AS resolve_avg
             FROM conflict_log WHERE run_id = @run),
         r AS (SELECT count(*) AS replans FROM replan_log WHERE run_id = @run),
-        s AS (SELECT ticks, tick_ms, overruns, stall_ms FROM simulations WHERE run_id = @run)
-        INSERT INTO run_metrics (run_id, move_ms, work_ms, wait_ms, idle_ms, utilization, wait_ratio, idle_ratio,
+        s AS (SELECT ticks, tick_ms, overruns, stall_ms, ended_at FROM simulations WHERE run_id = @run)
+        INSERT INTO run_metrics (run_id, complete, move_ms, work_ms, wait_ms, idle_ms, utilization, wait_ratio, idle_ratio,
                                  wait_count, wait_ms_avg, throughput_per_hour, lead_time_p50, lead_time_p90, lead_time_p99,
                                  path_efficiency, task_failed_ratio, conflict_count, deadlock_count, deadlock_resolve_ms_avg,
                                  replan_count, replan_per_task, tick_overruns, stall_ms, computed_at)
-        SELECT @run, m.mv, m.wk, m.wt, m.idl,
+        SELECT @run, (s.ended_at IS NOT NULL), m.mv, m.wk, m.wt, m.idl,
                ((m.mv + m.wk)::double precision / NULLIF(m.mv + m.wk + m.wt + m.idl, 0))::real,
                (m.wt::double precision / NULLIF(m.mv + m.wk + m.wt + m.idl, 0))::real,
                (m.idl::double precision / NULLIF(m.mv + m.wk + m.wt + m.idl, 0))::real,
@@ -71,6 +71,7 @@ public sealed class ReconcileQueries : IReconcileQueries
                s.overruns, s.stall_ms, now()
         FROM m CROSS JOIN t CROSS JOIN c CROSS JOIN r LEFT JOIN s ON true
         ON CONFLICT (run_id) DO UPDATE SET
+            complete = EXCLUDED.complete,
             move_ms = EXCLUDED.move_ms, work_ms = EXCLUDED.work_ms, wait_ms = EXCLUDED.wait_ms, idle_ms = EXCLUDED.idle_ms,
             utilization = EXCLUDED.utilization, wait_ratio = EXCLUDED.wait_ratio, idle_ratio = EXCLUDED.idle_ratio,
             wait_count = EXCLUDED.wait_count, wait_ms_avg = EXCLUDED.wait_ms_avg,

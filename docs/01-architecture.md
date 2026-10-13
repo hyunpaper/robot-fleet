@@ -565,6 +565,8 @@ CREATE TABLE metrics_minute (
 -- run 단위 결과 집계. simulations는 조건(입력), run_metrics는 결과 — 지표 정의가 바뀌어도 재집계만 한다
 CREATE TABLE run_metrics (
     run_id        TEXT PRIMARY KEY,
+    complete      BOOLEAN NOT NULL DEFAULT false,   -- simulations.ended_at IS NOT NULL. 미완료(중단 · 크래시) run은 false —
+                                                    -- throughput · tick_overruns가 NULL이라 완료 run과 섞어 비교하면 안 된다(10 §10)
     -- 시간 분해 (전체 로봇 합)
     move_ms BIGINT, work_ms BIGINT, wait_ms BIGINT, idle_ms BIGINT,
     utilization   REAL,   -- (move+work)/전체
