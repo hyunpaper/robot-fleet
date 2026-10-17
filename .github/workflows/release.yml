@@ -1,0 +1,64 @@
+name: Release
+
+# 매주 월요일 09:00 KST에 main HEAD로 주간 릴리즈 태그 vYYYY.MM.DD.0을 만든다.
+# 핫픽스는 같은 주 릴리즈의 마지막 자리만 올린다(vYYYY.MM.DD.1, .2 ...): workflow_dispatch에 hotfix_of와 ref를 준다.
+on:
+  schedule:
+    - cron: "0 0 * * 1"
+  workflow_dispatch:
+    inputs:
+      hotfix_of:
+        description: "핫픽스 대상 주간 태그(예: v2026.10.19.0). 비우면 주간 릴리즈"
+        required: false
+      ref:
+        description: "태그를 붙일 브랜치·커밋(핫픽스는 release/vYYYY.MM.DD)"
+        required: false
+        default: main
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || 'main' }}
+          fetch-depth: 0
+
+      - name: Tag
+        id: tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.hotfix_of }}" ]; then
+            base="${{ inputs.hotfix_of }}"
+            base="${base%.*}"
+            git rev-parse -q --verify "refs/tags/${base}.0" >/dev/null || { echo "${base}.0 태그 없음"; exit 1; }
+            last=$(git tag -l "${base}.*" | sed 's/.*\.//' | sort -n | tail -1)
+            tag="${base}.$((last + 1))"
+          else
+            prev=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
+            if [ -n "$prev" ] && [ "$(git rev-list "${prev}..HEAD" --count)" = "0" ]; then
+              echo "지난 릴리즈(${prev}) 이후 변경 없음, 건너뜀"
+              exit 0
+            fi
+            # 수동 실행이어도 그 주 월요일 날짜를 쓴다.
+            today=$(TZ=Asia/Seoul date +%F)
+            monday=$(date -d "${today} -$(( $(date -d "${today}" +%u) - 1 )) days" +%Y.%m.%d)
+            tag="v${monday}.0"
+          fi
+          git rev-parse -q --verify "refs/tags/${tag}" >/dev/null && { echo "${tag} 이미 있음"; exit 1; }
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Release
+        if: steps.tag.outputs.tag != ''
+        run: |
+          gh release create "${{ steps.tag.outputs.tag }}" \
+            --target "$(git rev-parse HEAD)" \
+            --title "${{ steps.tag.outputs.tag }}" \
+            --generate-notes

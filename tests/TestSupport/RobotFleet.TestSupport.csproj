@@ -1,4 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- xunit 참조로 테스트 프로젝트로 잡히지 않게 한다. 헬퍼 라이브러리일 뿐이다. -->
+    <IsTestProject>false</IsTestProject>
+  </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="RobotFleet.Reconcile.Tests" />
   </ItemGroup>

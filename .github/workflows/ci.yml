@@ -1,0 +1,38 @@
+name: CI
+
+# PR당 push가 적도록 운영하므로 PR 이벤트에서만 돌린다. main 머지 push에서는 다시 돌리지 않는다.
+on:
+  pull_request:
+    branches: [main, "release/**"]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DOTNET_NOLOGO: true
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Init
+        run: dotnet restore RobotFleet.sln
+
+      - name: Build
+        run: dotnet build RobotFleet.sln -c Release --no-restore
+
+      # 통합 테스트는 접속 정보가 없으면 skip된다.
+      - name: Test
+        run: dotnet test RobotFleet.sln -c Release --no-build
