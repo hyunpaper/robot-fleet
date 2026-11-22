@@ -35,7 +35,7 @@
 | 워크플로 | 언제 | 하는 일 |
 |---|---|---|
 | `ci.yml` | PR(대상 `main`, `release/**`) | Init(restore) → Build → Test. 배포 없음. 통합 테스트는 접속 정보가 없어 skip |
-| `review.yml` | 같은 PR | Claude 코드 리뷰(`anthropics/claude-code-action`). 인라인 코멘트 + 요약, 머지 차단 결함이 있으면 체크 실패. 저장소 시크릿 `ANTHROPIC_API_KEY` 필요 |
+| `review.yml` | 같은 PR | Claude 코드 리뷰(`anthropics/claude-code-action`, 모델 `claude-fable-5-2`). 인라인 코멘트 + 요약, 머지 차단 결함이 있으면 체크 실패. 저장소 시크릿 `ANTHROPIC_API_KEY` 필요 |
 | `release.yml` | 매주 월요일 · 수동 | 릴리즈 태그(아래 "릴리즈") |
 
 로컬 완료 기준은 그대로다: `dotnet build` 경고 0, `dotnet test` 실패 0, `dotnet format --verify-no-changes` 통과.

@@ -49,7 +49,7 @@ jobs:
                명백한 런타임 오류, 보안)이 하나라도 있으면 blocking = true, blocking_count = 그 건수입니다.
           claude_args: |
             --max-turns 20
-            --model claude-opus-5-5
+            --model claude-fable-5-2
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*)"
             --json-schema '{"type":"object","properties":{"blocking":{"type":"boolean"},"blocking_count":{"type":"integer"}},"required":["blocking","blocking_count"]}'
 
