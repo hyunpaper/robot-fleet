@@ -38,6 +38,8 @@
 | `review.yml` | 같은 PR | Claude 코드 리뷰(`anthropics/claude-code-action`, 모델 `claude-fable-5-2`). 인라인 코멘트 + 요약, 머지 차단 결함이 있으면 체크 실패. 저장소 시크릿 `ANTHROPIC_API_KEY` 필요 |
 | `release.yml` | 매주 월요일 · 수동 | 릴리즈 태그(아래 "릴리즈") |
 
+> **시크릿 등록 전 리뷰 게이트**: `ANTHROPIC_API_KEY`가 없어 `review` 체크가 인증 단계에서 실패하는 동안은, 메인 세션이 띄운 Fable 리뷰어 에이전트(모델 `fable`)의 PR 리뷰 코멘트를 코드 리뷰로 삼는다. 본문 첫 줄 `판정: 승인`이 나와야 머지한다. 재검토는 같은 리뷰어에게 지적 번호별로 요청한다. 시크릿이 등록되면 `review` 체크로 돌아간다.
+
 로컬 완료 기준은 그대로다: `dotnet build` 경고 0, `dotnet test` 실패 0, `dotnet format --verify-no-changes` 통과.
 **코드 커버리지는 측정하지 않고 목표도 두지 않는다.** 테스트는 설계 문서의 시험 표와 결함 재현에 맞춘다.
 

@@ -203,7 +203,7 @@
 <text x="1246.6" y="719" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">×1</text>
 <text x="1006" y="736" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">×2 (상한) · 판정 /move-requests/batch</text>
 <text x="1006" y="750" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">경로 /paths/batch · 재전송 멱등</text>
-<text x="1006" y="764" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">hostPort 18080 · 노드당 최대 1 · 200m / 256Mi</text>
+<text x="1006" y="764" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">hostPort 18080 · 노드당 최대 1 · node-1 제외 · 200m / 256Mi</text>
 <rect x="1490" y="386" width="350" height="60" rx="8" fill="#ffffff" stroke="#2b5aa6" stroke-width="1.2"/>
 <rect x="1490" y="386" width="5" height="60" rx="2" fill="#2b5aa6" stroke="none" stroke-width="1"/>
 <text x="1506" y="405" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">EventWorker</text>
@@ -229,7 +229,7 @@
 <text x="1746.6" y="555" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">×1</text>
 <text x="1506" y="572" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">×2 (상한) · 판정 /move-requests/batch</text>
 <text x="1506" y="586" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">경로 /paths/batch · 재전송 멱등</text>
-<text x="1506" y="600" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">hostPort 18080 · 노드당 최대 1 · 200m / 256Mi</text>
+<text x="1506" y="600" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">hostPort 18080 · 노드당 최대 1 · node-1 제외 · 200m / 256Mi</text>
 <rect x="1490" y="620" width="350" height="156" rx="8" fill="#ffffff" stroke="#a23b72" stroke-width="1.2"/>
 <rect x="1493.5" y="623.5" width="343" height="149" rx="5" fill="none" stroke="#a23b72" stroke-width="1.2"/>
 <rect x="1490" y="620" width="5" height="156" rx="2" fill="#a23b72" stroke="none" stroke-width="1"/>
