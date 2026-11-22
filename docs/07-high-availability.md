@@ -11,7 +11,7 @@
 | 애플리케이션 pod 1개 종료 (FleetController · IngestApi · EventWorker · QueryApi) | 서비스 유지 | replicas ≥ 2 + 재전송 멱등 |
 | Redis primary 다운 | 틱 일시 정지 후 재개. 로봇 겹침 0 | Sentinel 장애 조치 + 상태 재주장 |
 | RabbitMQ 노드 1개 다운 | task · conflict 유실 0. telemetry 일부 유실 | quorum queue |
-| 노드 1개 다운 · drain (node-1~3 어느 것이든) | 위 셋이 동시에 일어나도 유지. node-1이면 스케줄링 · 재배치도 멈추되 기동 중인 pod는 유지하고, Simulator는 node-1 밖에 있어 틱이 이어진다 | 데이터 계층 3노드 분산, Simulator node-1 회피 |
+| 노드 1개 다운 · drain (node-1~3 어느 것이든) | 위 셋이 동시에 일어나도 유지. node-1이면 스케줄링 · 재배치도 멈추되 기동 중인 pod는 유지하고, Simulator는 클러스터 밖이라 틱이 이어진다 | 데이터 계층 3노드 분산, Simulator 클러스터 밖 |
 
 ### 범위 밖
 
@@ -47,7 +47,7 @@
 | 결정 | 내용 | 근거 |
 |---|---|---|
 | 인스턴스 **2대 고정**, HPA 없음 | 상한도 2 | 한 틱의 배치는 한 인스턴스가 통째로 판정하므로 3대째부터는 판정 처리량이 늘지 않는다. 2대는 가용성과 경로 계산 분담용 |
-| Simulator가 인스턴스를 고른다 (headless Service) | 성공한 인스턴스에 고정, 실패·409 때만 교대 | Simulator는 응답을 받아야 다음 틱으로 간다 → 같은 맵에 동시 판정이 없다 → 우선순위 정렬과 결정성(01 "배치 내 판정 순서")이 유지된다. ClusterIP는 keep-alive로 고착되고 죽은 pod로 재전송될 수 있어 쓰지 않는다 (08 C6) |
+| Simulator가 인스턴스를 고른다 (고정 주소 목록 — M5~ 노드 IP + `hostPort`, 08 "설비 유입 · LB") | 성공한 인스턴스에 고정, 실패·409 때만 교대 | Simulator는 응답을 받아야 다음 틱으로 간다 → 같은 맵에 동시 판정이 없다 → 우선순위 정렬과 결정성(01 "배치 내 판정 순서")이 유지된다. ClusterIP는 keep-alive로 고착되고 죽은 pod로 재전송될 수 있어 쓰지 않는다 (08 C6) |
 | 장애 시 **같은 틱 배치를 다른 인스턴스로 재전송** | 타임아웃 → 재전송 → 소진 시 틱 정지 | 응답만 유실됐을 수 있으므로 재전송은 반드시 **멱등**이어야 한다 |
 | 재전송 멱등 | 같은 `(mapId, tick)` 재요청이면 맵 해시에 기록된 마지막 판정을 그대로 반환. 락 획득과 판정 기록은 하나의 커밋 Lua | 첫 처리에서 락이 이미 걸렸는데 다시 판정하면 교착 해소 결정이 갈릴 수 있다. 기록은 최신 1틱이면 충분하다 — Simulator는 이전 틱을 다시 보내지 않는다 (08 §4) |
 | 판정과 경로 계산 분리 | 같은 배포 단위, 다른 엔드포인트. 판정은 틱당 1건 한 곳, A*는 무상태라 어느 인스턴스든 | 판정은 분산할 수 없지만 계산 부하는 나눌 수 있다. `IMoveArbiter` / `IPathPlanner` 경계가 이미 그 선이다 |
@@ -112,7 +112,8 @@ Sentinel 장애 조치 · quorum 재선출 · 해시 체인이 이 프로젝트�
 | Redis ×3, Sentinel ×3, RabbitMQ ×3 | 노드당 1개, **required anti-affinity** | 노드 하나가 죽어도 과반이 남는다 |
 | PostgreSQL ×1 | node-1 고정 + local PV(Retain) | 범위 밖. 단일 유지 |
 | FleetController ×2 | 서로 다른 노드, preferred anti-affinity | 노드 장애에 둘 다 죽지 않게 |
-| Simulator ×1 | **node-1을 피한다** (required nodeAffinity `NotIn node-1`), node-2 · 3 중 어디든 | node-1에는 이미 k3s server · PostgreSQL이 있다. Simulator까지 두면 node-1 장애 때 틱이 멈추고 API 서버도 함께 내려가 재배치조차 안 된다. node-2 · 3에 두면 그 노드가 죽어도 API 서버가 살아 있어 다른 노드로 재시작된다(새 epoch, 범위 밖 항목 그대로) |
+| Simulator ×1 | **클러스터 밖**(집 PC 호스트, 아래 결정 로그 갱신 행) | 설비는 공장망에 있다. 노드 장애가 틱을 직접 끊지 않고 재배치 · 새 epoch도 없다 |
+| IngestApi ×3 | 노드당 1, required anti-affinity | HAProxy가 모든 노드를 분배 후보로 쓴다(02 "설비 데이터 유입") |
 | 나머지 애플리케이션 · 모니터링 | 세 노드 모두 허용 | "node-2 / node-3만" 제한 폐기 |
 
 Redis · RabbitMQ 멤버는 세 노드 전부에 있고, 노드별 차이는 k3s server · PostgreSQL · 모니터링이 어디에 붙느냐뿐이다.
@@ -120,7 +121,7 @@ Redis · RabbitMQ 멤버는 세 노드 전부에 있고, 노드별 차이는 k3s
 
 | 노드 | 사양 | 근거 |
 |---|---|---|
-| node-1~3 | 기본 4GiB (2 vCPU) / 실험 8GiB (4 vCPU) | 시스템 예약 0.6Gi를 뺀 3.4Gi에 request 최대 2.2Gi. 1대가 빠져도 남은 2대에 앱 pod 전부 재배치, 노드당 2.0~2.3Gi (08 §11) |
+| node-1~3 | 기본 4GiB (2 vCPU) / 실험 8GiB (4 vCPU) | 시스템 예약 0.6Gi를 뺀 3.4Gi에 request 최대 1.9Gi. 1대가 빠져도 남은 2대에 앱 pod 전부 재배치, 노드당 최악 2.6Gi (08 §11) |
 
 ---
 
