@@ -136,16 +136,15 @@
 <text x="1506" y="1034" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">3노드 클러스터 · 300m / 512Mi</text>
 <text x="1506" y="1048" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">task/conflict quorum 32 · telemetry classic 16</text>
 <text x="1506" y="1062" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">local PV /data/rabbitmq</text>
-<rect x="490" y="386" width="350" height="128" rx="8" fill="#ffffff" stroke="#5b3fa5" stroke-width="1.2"/>
-<rect x="490" y="386" width="5" height="128" rx="2" fill="#5b3fa5" stroke="none" stroke-width="1"/>
+<rect x="490" y="386" width="350" height="98" rx="8" fill="#ffffff" stroke="#5b3fa5" stroke-width="1.2"/>
+<rect x="490" y="386" width="5" height="98" rx="2" fill="#5b3fa5" stroke="none" stroke-width="1"/>
 <text x="506" y="407" font-size="13.5" fill="#1f2937" font-weight="bold" text-anchor="start">nginx ingress controller</text>
 <rect x="804.8" y="395" width="25.2" height="17" rx="8" fill="#5b3fa5" stroke="none" stroke-width="1" opacity="0.9"/>
 <text x="817.4" y="407" font-size="10.5" fill="#ffffff" font-weight="bold" text-anchor="middle">×1</text>
 <text x="506" y="424" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">host fleet.local · 100m / 128Mi</text>
 <text x="506" y="439" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">proxy-read-timeout 3600s (WebSocket 유지)</text>
 <text x="506" y="454" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">/api/v1 · /ws → QueryApi</text>
-<text x="506" y="469" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">/api/v1/events → IngestApi</text>
-<text x="506" y="484" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">/admin → ControlApi (192.168.10.0/24만 허용)</text>
+<text x="506" y="469" font-size="11" fill="#6b7280" font-weight="normal" text-anchor="start">/admin → ControlApi (192.168.10.0/24만 허용)</text>
 <rect x="490" y="530" width="350" height="58" rx="6" fill="#fff7e0" stroke="#e2b579" stroke-width="1"/>
 <text x="502" y="548" font-size="11" fill="#9a5b12" font-weight="bold" text-anchor="start">node-1 장애 시 API 서버도 함께 내려감</text>
 <text x="502" y="563" font-size="10.5" fill="#6b7280" font-weight="normal" text-anchor="start">기동 중 pod 유지 · 스케줄링과 kubectl만 정지</text>
@@ -308,7 +307,6 @@
 <path d="M760,108 L760,386" fill="none" stroke="#a23b72" stroke-width="2" marker-end="url(#m-ctl)" stroke-dasharray="2 3" stroke-linejoin="round"/>
 <text x="750" y="124" font-size="11" fill="#a23b72" font-weight="bold" text-anchor="end">내부망만 · 승인 · 거절 · run 관리</text>
 <path d="M840,416 L990,416" fill="none" stroke="#6d4fc0" stroke-width="1.8" marker-end="url(#m-ing)" stroke-linejoin="round"/>
-<path d="M840,484 L990,484" fill="none" stroke="#6d4fc0" stroke-width="1.8" marker-end="url(#m-ing)" stroke-linejoin="round"/>
 <path d="M228,318 L228,618" fill="none" stroke="#1f3a63" stroke-width="3.2" marker-end="url(#m-flow)" stroke-linejoin="round"/>
 <text x="240" y="440" font-size="11" fill="#1f3a63" font-weight="bold" text-anchor="start">② 이벤트 배치 · HTTP</text>
 <text x="240" y="454" font-size="11" fill="#1f3a63" font-weight="bold" text-anchor="start">틱당 1건 · 순차</text>
@@ -346,7 +344,7 @@
 <text x="1728" y="869" font-size="10.5" fill="#7a8390" font-weight="normal" text-anchor="start">FleetController · IngestApi</text>
 <text x="1728" y="882" font-size="10.5" fill="#7a8390" font-weight="normal" text-anchor="start">: primary 탐색</text>
 <text x="1022" y="882" font-size="10.5" fill="#8a5a1c" font-weight="normal" text-anchor="start">QueryApi → PostgreSQL (node-1)</text>
-<path d="M840,502 L920,502 L920,804 L1570,804 L1570,776" fill="none" stroke="#6d4fc0" stroke-width="1.8" marker-end="url(#m-ing)" stroke-dasharray="2 3" stroke-linejoin="round"/>
+<path d="M840,470 L920,470 L920,804 L1570,804 L1570,776" fill="none" stroke="#6d4fc0" stroke-width="1.8" marker-end="url(#m-ing)" stroke-dasharray="2 3" stroke-linejoin="round"/>
 <text x="1022" y="800" font-size="10.5" fill="#6d4fc0" font-weight="normal" text-anchor="start">관리 콘솔 요청 (내부망만)</text>
 <path d="M1600,776 L1600,820 L900,820 L900,645 L840,645" fill="none" stroke="#a23b72" stroke-width="1.8" marker-end="url(#m-ctl)" stroke-linejoin="round"/>
 <text x="1022" y="816" font-size="10.5" fill="#a23b72" font-weight="normal" text-anchor="start">k8s API: EventWorker HPA patch</text>
