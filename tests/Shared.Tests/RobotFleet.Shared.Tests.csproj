@@ -13,6 +13,7 @@
     <ProjectReference Include="../../src/Shared/RobotFleet.Shared.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <Content Include="Agent/Golden/**" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../maps/*.json" Link="maps/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
