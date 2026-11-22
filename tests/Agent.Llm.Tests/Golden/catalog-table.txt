@@ -1,0 +1,17 @@
+| 키 | 형식 | 기본값 | 허용 범위 | 1회 변경 상한 | 다루는 동작 | 영향 지표 |
+|---|---|---|---|---|---|---|
+| congestion_alpha | 실수 | 0 | 0 ~ 2 | ±0.3 | 경로 탐색 — 혼잡 가중치 | 경로 효율, 혼잡 손실률 |
+| turn_cost | 실수 | 0.5 | 0 ~ 2 | ±0.25 | 경로 탐색 — 회전 비용 | 경로 효율, 리드타임 |
+| priority.wait_weight | 실수 | 0.01 | 0 ~ 0.1 | ±0.01 | 우선순위 정책 | 리드타임 p99, 작업 실패율 |
+| priority.distance_weight | 실수 | 1 | 0 ~ 3 | ±0.5 | 우선순위 정책 | 평균 리드타임 |
+| priority.task_priority_weight | 실수 | 50 | 0 ~ 200 | ±25 | 우선순위 정책 | 긴급 작업 리드타임 |
+| replan_wait_threshold_ms | 정수 | 500 | 200 ~ 2000 | ±250 | 재계획 트리거 | 재계획률, 혼잡 손실률 |
+| replan_cooldown_ms | 정수 | 100 | 50 ~ 1000 | ±100 | 재계획 폭주 방지 | 재계획률, 판단 p99 |
+| replan_max_per_task | 정수 | 5 | 3 ~ 10 | ±2 | 재계획 폭주 방지 | 작업 실패율 |
+| deadlock_detect_wait_ms | 정수 | 1000 | 500 ~ 3000 | ±500 | 교착 탐지 | 교착 발생률, 해소 시간 |
+| yield_search_max_distance | 정수 | 5 | 3 ~ 15 | ±3 | 해소 — 양보 | 교착 해소 시간, 작업 실패율 |
+| yield_cost.distance_weight | 실수 | 1 | 0 ~ 3 | ±0.5 | 해소 — 양보 비용 | 교착 해소 시간 |
+| yield_cost.priority_weight | 실수 | 1 | 0 ~ 3 | ±0.5 | 해소 — 양보 비용 | 긴급 작업 영향 |
+| deadlock_resolve_ttl_ticks | 정수 | 50 | 30 ~ 120 | ±20 | 교착 해소 락 | 재탐지 빈도 |
+
+연동 제약: deadlock_resolve_ttl_ticks >= yield_search_max_distance × 10

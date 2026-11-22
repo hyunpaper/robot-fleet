@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "properties": {
+    "explanations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "candidate_id": { "type": "string" },
+          "explanation": { "type": "string" },
+          "cited_fact_ids": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["candidate_id", "explanation", "cited_fact_ids"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["explanations"],
+  "additionalProperties": false
+}

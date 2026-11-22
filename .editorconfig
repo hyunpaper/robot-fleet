@@ -1,0 +1,8 @@
+root = true
+
+# 줄바꿈은 .gitattributes(eol=lf)와 맞춘다. 없으면 Windows의 dotnet format이 CRLF를 기본으로 써 LF 체크아웃에서 검사가 실패한다
+[*]
+end_of_line = lf
+
+[*.sln]
+end_of_line = crlf

@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 14 §1: 요청 조립 · 응답 파싱 · 호출 경계. SDK는 M9 연결 구현체에서 참조한다(L2) -->
+  <ItemGroup>
+    <ProjectReference Include="../Shared/RobotFleet.Shared.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Prompts/*.txt" />
+  </ItemGroup>
+</Project>

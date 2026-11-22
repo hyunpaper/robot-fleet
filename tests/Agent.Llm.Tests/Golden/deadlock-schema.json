@@ -1,0 +1,46 @@
+{
+  "type": "object",
+  "properties": {
+    "rationale": { "type": "string" },
+    "cited_fact_ids": { "type": "array", "items": { "type": "string" } },
+    "decision": { "type": "string", "enum": ["propose", "no_change"] },
+    "change": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "properties": {
+            "parameter_key": {
+              "type": "string",
+              "enum": [
+                "congestion_alpha", "turn_cost", "priority.wait_weight", "priority.distance_weight",
+                "priority.task_priority_weight", "replan_wait_threshold_ms", "replan_cooldown_ms",
+                "replan_max_per_task", "deadlock_detect_wait_ms", "yield_search_max_distance",
+                "yield_cost.distance_weight", "yield_cost.priority_weight", "deadlock_resolve_ttl_ticks"
+              ]
+            },
+            "new_value": { "type": "number" }
+          },
+          "required": ["parameter_key", "new_value"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "coupled_change": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "properties": {
+            "parameter_key": { "type": "string", "enum": ["deadlock_resolve_ttl_ticks"] },
+            "new_value": { "type": "number" }
+          },
+          "required": ["parameter_key", "new_value"],
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "required": ["rationale", "cited_fact_ids", "decision", "change", "coupled_change"],
+  "additionalProperties": false
+}

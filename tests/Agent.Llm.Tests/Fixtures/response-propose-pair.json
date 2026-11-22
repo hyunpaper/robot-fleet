@@ -1,0 +1,1 @@
+{"rationale":"cyc-1 순환이 6회 반복됐고 매번 회피 지점 없이 재시도(no_yield_retries 3)했다. 양보 탐색 거리 5 안에 빈 칸이 없어 탐색 거리를 7로 늘리고, 연동 제약에 맞춰 해소 락 TTL을 50에서 70으로 올린다.","cited_fact_ids":["cyc-1","set-10","set-13"],"decision":"propose","change":{"parameter_key":"yield_search_max_distance","new_value":7},"coupled_change":{"parameter_key":"deadlock_resolve_ttl_ticks","new_value":70}}

@@ -121,7 +121,7 @@ Redis · RabbitMQ 멤버는 세 노드 전부에 있고, 노드별 차이는 k3s
 
 | 노드 | 사양 | 근거 |
 |---|---|---|
-| node-1~3 | 기본 4GiB (2 vCPU) / 실험 8GiB (4 vCPU) | 시스템 예약 0.6Gi를 뺀 3.4Gi에 request 최대 1.9Gi. 1대가 빠져도 남은 2대에 앱 pod 전부 재배치, 노드당 최악 2.6Gi (08 §11) |
+| node-1~3 | 기본 4GiB (2 vCPU) / 실험 8GiB (4 vCPU) | 시스템 예약 0.6Gi를 뺀 3.4Gi에 request 최대 1.9Gi. 1대가 빠지면 EventWorker · QueryApi · nginx만 재배치(FleetController · IngestApi는 Pending), 노드당 최악 2.3Gi (08 §11) |
 
 ---
 
@@ -166,7 +166,7 @@ Redis · RabbitMQ 멤버는 세 노드 전부에 있고, 노드별 차이는 k3s
 | 8 | quorum queue 설정 | 32 quorum + 16 classic. leader 분산, publisher confirm, SAC, delivery limit + DLQ, 메모리 상한 | §8 |
 | 9 | 01 멱등 2단계 수정 | telemetry 실패는 drop + 메트릭, task · conflict만 503. Redis 오류 시 멱등 1단계 fail-open | §9 |
 | 10 | StatefulSet · anti-affinity · local PV | 데이터 멤버 노드당 1 (required), FleetController 노드당 1(hostPort) · node-1 제외, PostgreSQL node-1, taint 없음, 노드명 고정 | §10 |
-| 11 | 리소스 표 (02) | 기본(4GiB) 5.41Gi / 실험(8GiB) 6.16Gi 두 구성, limit = request × 2, 노드 1대 장애 시 재배치 가능. HPA 상한은 CPU로 결정 | §11 |
+| 11 | 리소스 표 (02) | 기본(4GiB) 5.16Gi / 실험(8GiB) 5.91Gi 두 구성, limit = request × 2, 노드 1대 장애 시 재배치 가능. HPA 상한은 CPU로 결정 | §11 |
 | 12 | M8 장애 주입 시나리오 (02) | Redis primary · Sentinel · RabbitMQ leader · FleetController 처리 중 · drain(node-2 · 3) · node-1(API 서버) 장애 · 노드 강제 소실. 시나리오마다 확인 사항 · 지표 · 합격 기준 | §12 |
 | 13 | 배포 구성도 갱신 | 노드 3대 구성 | §13 |
 
