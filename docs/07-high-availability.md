@@ -111,7 +111,7 @@ Sentinel 장애 조치 · quorum 재선출 · 해시 체인이 이 프로젝트�
 |---|---|---|
 | Redis ×3, Sentinel ×3, RabbitMQ ×3 | 노드당 1개, **required anti-affinity** | 노드 하나가 죽어도 과반이 남는다 |
 | PostgreSQL ×1 | node-1 고정 + local PV(Retain) | 범위 밖. 단일 유지 |
-| FleetController ×2 | 서로 다른 노드, preferred anti-affinity | 노드 장애에 둘 다 죽지 않게 |
+| FleetController ×2 | node-2 · 3, 노드당 1(`hostPort`) · required `NotIn node-1` (08 §10) | 노드 장애에 둘 다 죽지 않게. node-1 장애 시 재배치가 멈추므로 node-2 · 3에 고정 |
 | Simulator ×1 | **클러스터 밖**(집 PC 호스트, 아래 결정 로그 갱신 행) | 설비는 공장망에 있다. 노드 장애가 틱을 직접 끊지 않고 재배치 · 새 epoch도 없다 |
 | IngestApi ×3 | 노드당 1, required anti-affinity | HAProxy가 모든 노드를 분배 후보로 쓴다(02 "설비 데이터 유입") |
 | 나머지 애플리케이션 · 모니터링 | 세 노드 모두 허용 | "node-2 / node-3만" 제한 폐기 |
@@ -165,7 +165,7 @@ Redis · RabbitMQ 멤버는 세 노드 전부에 있고, 노드별 차이는 k3s
 | 7 | Redis 클라이언트 연결 | Sentinel 경유. 재연결 시간은 1의 30초 안 | §7 |
 | 8 | quorum queue 설정 | 32 quorum + 16 classic. leader 분산, publisher confirm, SAC, delivery limit + DLQ, 메모리 상한 | §8 |
 | 9 | 01 멱등 2단계 수정 | telemetry 실패는 drop + 메트릭, task · conflict만 503. Redis 오류 시 멱등 1단계 fail-open | §9 |
-| 10 | StatefulSet · anti-affinity · local PV | 데이터 멤버 노드당 1 (required), FleetController preferred, PostgreSQL node-1, taint 없음, 노드명 고정 | §10 |
+| 10 | StatefulSet · anti-affinity · local PV | 데이터 멤버 노드당 1 (required), FleetController 노드당 1(hostPort) · node-1 제외, PostgreSQL node-1, taint 없음, 노드명 고정 | §10 |
 | 11 | 리소스 표 (02) | 기본(4GiB) 5.41Gi / 실험(8GiB) 6.16Gi 두 구성, limit = request × 2, 노드 1대 장애 시 재배치 가능. HPA 상한은 CPU로 결정 | §11 |
 | 12 | M8 장애 주입 시나리오 (02) | Redis primary · Sentinel · RabbitMQ leader · FleetController 처리 중 · drain(node-2 · 3) · node-1(API 서버) 장애 · 노드 강제 소실. 시나리오마다 확인 사항 · 지표 · 합격 기준 | §12 |
 | 13 | 배포 구성도 갱신 | 노드 3대 구성 | §13 |

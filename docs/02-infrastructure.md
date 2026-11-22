@@ -188,7 +188,7 @@ VIP 192.168.10.20 ── keepalived ── lb-1 (.21, MASTER) / lb-2 (.22, BACKU
 |---|---|
 | **어느 노드로 보낼지는 HAProxy가 정한다** | IngestApi Service는 `NodePort` + **`externalTrafficPolicy: Local`**. 받은 노드의 pod가 처리하고 kube-proxy가 다른 노드로 다시 넘기지 않는다 |
 | IngestApi **노드당 1개**(3, required anti-affinity) | 모든 노드가 분배 후보가 된다. pod가 없거나 준비가 안 된 노드는 헬스체크에서 빠진다 |
-| 헬스체크 = IngestApi readiness | RabbitMQ 연결 · 토폴로지 준비가 안 된 인스턴스로 보내지 않는다 |
+| 헬스체크 = IngestApi readiness | 기동 시 토폴로지 선언이 끝난 인스턴스만 받는다. readiness는 이후 발행 실패를 반영하지 않으므로, 계속 5xx를 내는 노드는 HAProxy 수동 감시(`observe layer7`)가 뺀다(08 "설비 유입 · LB" 2) |
 | 요청 단위 분배 | IngestApi는 상태가 없고 멱등 키가 Redis에 있어, 같은 `batchId` 재전송이 다른 노드로 가도 중복이 생기지 않는다(08 §9 멱등 2단계) |
 | HAProxy 2대 + keepalived VIP | LB 1대 장애에도 유입이 이어진다. 장애 조치 경로가 하나 늘어나므로 M8 시나리오에 넣는다 |
 | **이벤트 수집만** HAProxy를 거친다 | 이동 판정(Simulator → FleetController)은 성공 인스턴스 고정 · 실패 시 교대 · 재전송 규약과 p99 10ms 예산(08 §2 · §5)이 있어 LB를 끼우지 않는다 |
@@ -296,6 +296,7 @@ metadata:
   namespace: fleet-app
 spec:
   replicas: 3                 # 노드당 1 (required anti-affinity)
+  minReadySeconds: 15         # HAProxy rise 10(약 10초)보다 길게
   strategy:
     rollingUpdate: { maxSurge: 0, maxUnavailable: 1 }
   template:
@@ -323,8 +324,7 @@ spec:
             httpGet: { path: /health/live, port: 8080 }
             initialDelaySeconds: 15
             periodSeconds: 20
-          lifecycle:
-            preStop: { exec: { command: ["sleep", "4"] } }   # HAProxy가 DOWN으로 뺄 때까지
+          # preStop 없음 — M5부터 앱이 종료 시작 시 readiness를 끄고 4초 뒤 멈춘다(08 "설비 유입 · LB" 2 "종료 중 분배")
 ---
 apiVersion: v1
 kind: Service
@@ -570,7 +570,7 @@ HPA의 `stabilizationWindowSeconds`는 scaleDown 300초로 둔다. 재배정마�
 | RabbitMQ leader 노드 kill | `rabbitmq-queues`로 리더 최다 노드 확인 → `kubectl delete pod rabbitmq-N --force` | quorum 리더 재선출, Ingest 503 → Simulator 순차 재전송, telemetry 파티션 일부 공백 | task · conflict 유실 수, 중복 수, telemetry 유실 수, Ingest 503 수, 리더 재선출 시간 | task · conflict 유실 0, 중복 0, 틱 정지 0 |
 | FleetController 1대 kill (배치 처리 중) | `FLEET_FAULT_KILL_AT=after-read · after-commit · before-response` 각 100회 + 무작위 `kubectl delete pod --force` 30분 | 재전송이 다른 인스턴스로 가고, 적용된 판정 = Redis 기록 (08 §4 표) | 틱 정지 시간, 재시도 수, 기록 반환 수, 다이제스트 불일치 수 | 불일치 0, `state_lost` 0, 틱 정지 ≤ 1초 |
 | 노드 drain | `kubectl drain node-2 --ignore-daemonsets --delete-emptydir-data` → 10분 후 `uncordon` (대상은 **node-2 또는 node-3** — node-1은 API 서버) | PDB 준수, 그 노드의 Redis · Sentinel · RabbitMQ 멤버 이탈(primary · 리더였으면 장애 조치), 데이터 pod Pending → uncordon 후 재합류 | 틱 정지 시간, task · conflict 유실 수, telemetry 유실 수, 재합류 후 복제 완료 시간 | 틱 정지 ≤ 30초, task · conflict 유실 0 |
-| **node-1(API 서버) 장애** | node-1 VM 정지 | 다른 노드의 pod 계속 동작 · **Simulator · FleetController 틱 유지** · 스케줄링 · 재배치 정지 · `kubectl` 불가, 과반 2/3 유지 | 틱 정지 시간, 겹침 수 | 겹침 0, 틱 정지 ≤ 30초(node-1에 Redis primary가 있었을 때만 정지) |
+| **node-1(API 서버) 장애** | FleetController 두 pod가 node-2 · 3인지 확인(`kubectl get pod -o wide`) → node-1 VM 정지 | 다른 노드의 pod 계속 동작 · **Simulator · FleetController 틱 유지** · 스케줄링 · 재배치 정지 · `kubectl` 불가, 과반 2/3 유지 | 틱 정지 시간, 겹침 수 | 겹침 0, 틱 정지 ≤ 30초(node-1에 Redis primary가 있었을 때만 정지) |
 | **노드 강제 소실** | VM 전원 강제 차단(예고 없는 노드 소실). **스냅샷을 떠 두면 같은 상태에서 반복** | 과반 유지 여부, 데이터 pod Pending | 겹침 수, 틱 정지 시간 | 겹침 0 (틱 정지 시간은 기록) |
 | **`lb-1` 정지 (VIP 이동)** | (a) `lb-1`에서 `systemctl stop haproxy` (b) `lb-1` VM 전원 차단. 각 20회 | VIP가 `lb-2`로 이동, Simulator가 같은 `batchId`로 재전송, 버퍼가 흡수해 틱 유지. `lb-1` 복귀 후 VIP를 되찾지 않음(`nopreempt`) | 유입 중단 시간, VIP 이동 시간, 송신 재시도 수, 버퍼 최대 깊이, task · conflict · telemetry 유실 수, 중복 수 | 유실 0, 중복 0, 틱 정지 0, 유입 중단 ≤ 15초 |
 | **IngestApi 분배 제외** | (a) `kubectl delete pod ingest-api-N --grace-period=0 --force` 20회 (b) node-2 또는 node-3 VM 전원 차단(노드 강제 소실과 같은 실행) | HAProxy가 그 노드를 DOWN으로 빼고 나머지 노드로 분배. (b)는 IngestApi 1개 Pending | 분배 제외 시간, HAProxy 재시도 · 5xx 수, 유입 중단 시간, task · conflict 유실 수, 중복 수 | task · conflict 유실 0, 중복 0, 유입 중단 ≤ 10초, (a)는 틱 정지 0 |
