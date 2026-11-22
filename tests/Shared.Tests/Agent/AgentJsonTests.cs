@@ -37,7 +37,7 @@ public class AgentJsonTests
                 PastActionOutcome.AppliedNotImproved)]);
     }
 
-    [Fact]
+    [Fact] // AJ-01
     public void DeadlockSnapshot_Json_GoldenAndRoundTrip()
     {
         var json = JsonSerializer.Serialize(Snapshot(), AgentJsonContext.Default.DeadlockFactSnapshot);
@@ -53,7 +53,7 @@ public class AgentJsonTests
         JsonSerializer.Serialize(back, AgentJsonContext.Default.DeadlockFactSnapshot).Should().Be(json);
     }
 
-    [Fact]
+    [Fact] // AJ-02
     public void InfraIncident_Json_GoldenAndRoundTrip()
     {
         var incident = new InfraIncidentFacts(
@@ -78,7 +78,7 @@ public class AgentJsonTests
         JsonSerializer.Serialize(back, AgentJsonContext.Default.InfraIncidentFacts).Should().Be(json);
     }
 
-    [Theory]
+    [Theory] // AJ-03
     [InlineData("\"tick_ms\"")]
     [InlineData("9")]
     public void TuningKeyConverter_UnknownName_Throws(string keyToken)
