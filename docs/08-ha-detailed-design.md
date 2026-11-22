@@ -932,17 +932,46 @@ vrrp_instance ingest {
 | 우선순위 | `lb-1` 110 / `lb-2` 100, 둘 다 `state BACKUP` + `nopreempt` | 기동 시 높은 쪽(`lb-1`)이 MASTER가 된다(큰 틀). `lb-1`이 돌아와도 VIP를 되찾지 않는다 — 되찾으면 VIP 이동이 한 번 더 일어나 유입이 다시 끊긴다. `nopreempt`는 `state BACKUP`에서만 동작한다 |
 | HAProxy 추적 | `/healthz` 응답, `interval 1` · `fall 2`. 실패 시 weight 없이 **FAULT** | 프로세스 존재(`killall -0`)가 아니라 응답을 본다 — 멈춘 프로세스도 잡는다. FAULT는 우선순위 0 광고를 보내 상대가 즉시 승격한다. weight 방식은 `nopreempt`와 섞이면 복귀 판단이 꼬인다 |
 | `advert_int` | 1 | BACKUP의 MASTER 다운 판정 = 3 × 1s + skew((256 − 100) / 256 ≈ 0.61s) ≈ 3.6초. 1초 미만은 VRRPv2에서 불가하고, VM CPU steal에 오탐한다 |
-| GARP | 전환 즉시 + `garp_master_refresh 10`(MASTER 동안 10초마다) | 호스트가 첫 GARP를 놓쳐도 10초 안에 ARP가 바뀐다 |
+| GARP | 전환 즉시 + `garp_master_refresh 10`(MASTER 동안 10초마다) | 호스트가 GARP를 **받아들이되 첫 GARP를 놓친 경우**에만 10초 안으로 줄인다. 호스트가 GARP 자체를 무시하면 반복해도 소용없다(아래 "호스트 ARP 갱신") |
 | 분리 시 두 MASTER | 허용 | 두 HAProxy 모두 상태가 없고 같은 IngestApi로 보낸다. ARP가 흔들릴 뿐 안전성 · 멱등에 영향 없다 |
 
 | VIP 이동 예상 | 시간 | 구성 |
 |---|---|---|
 | `lb-1` HAProxy 정지 | 약 2.6초 | 추적 실패 2회(2초) + FAULT 광고 → `lb-2` skew 0.6초 |
 | `lb-1` VM 정지 | 약 3.6초 | 광고 3회 누락 + skew |
-| Simulator가 보는 유입 중단 | 최악 약 10초 | 진행 중 시도가 꺼진 `lb-1`에 묶이면 시도 타임아웃 5초 → 백오프 → VIP가 옮겨 간 뒤 새 연결. 호스트 ARP가 GARP를 따르지 않으면 `garp_master_refresh` 10초까지 늘 수 있다 |
+| Simulator가 보는 유입 중단 | 최악 약 10초 | 진행 중 시도가 꺼진 `lb-1`에 묶이면 시도 타임아웃 5초 → 백오프 → VIP가 옮겨 간 뒤 새 연결. **호스트가 GARP를 받아들인다는 전제**(아래) |
 
-> M8 합격 상한은 15초(§12)로 둔다. 버퍼 60초(600배치)의 1/4이라 틱이 멈추지 않는다. 측정이 15초를 넘고 원인이 호스트 ARP 갱신이면
-> `use_vmac`(VRRP 가상 MAC — 이동해도 MAC이 같아 ARP 갱신이 필요 없다)을 검토한다.
+> M8 합격 상한은 15초(§12)로 둔다. 버퍼 60초(600배치)의 1/4이라 틱이 멈추지 않는다.
+
+#### 호스트 ARP 갱신 (Windows)
+
+문서로는 확정되지 않는다. M5 전에 실측으로 정한다.
+
+| 근거 | 내용 |
+|---|---|
+| RFC 826 | 받은 ARP의 송신자 IP가 캐시에 있으면, 요청 대상과 무관하게 MAC을 덮어쓴다 |
+| Windows XP · 2003 | 캐시에 있는 IP가 보낸 ARP 요청을 받으면 그 항목 MAC을 갱신한다고 적혀 있다 |
+| Windows Vista 이후 | IPv4 ARP도 RFC 4861 이웃 캐시 모델로 바뀌었다(KB 2840421). 받은 GARP로 **기존 항목**을 갱신하는지는 Microsoft 문서에 명시가 없다 |
+| 이 호스트의 이웃 타이머 | `BaseReachableTime` 30000ms · `ReachableTime` 24500ms(15~45초 무작위) · `RetransmitTime` 1000ms (`Get-NetIPInterface`) |
+
+| 경우 | 유입 중단 최악 | 계산 |
+|---|---|---|
+| GARP를 받아들임 | 약 10초 | 위 표 |
+| GARP를 무시 | **약 53초** | REACHABLE 만료 최대 45초 → STALE에서 사용 → DELAY 5초 → 옛 MAC으로 유니캐스트 탐침 3 × 1초 실패 → 브로드캐스트 재해석. `garp_master_refresh`로 줄일 수 없다. 15초 상한 초과, 버퍼 60초에 근접 |
+
+실측(인프라 VM 1대로 M5 전에 가능, 약 5분):
+
+1. VM: `sudo ip link add vtest link ens33 type macvlan mode bridge && sudo ip link set vtest up` — MAC이 다른 두 번째 인터페이스
+2. VM: `sudo ip addr add 192.168.10.20/24 dev ens33` → 호스트: `ping -n 3 192.168.10.20` → `Get-NetNeighbor -IPAddress 192.168.10.20`의 MAC = ens33 MAC 확인
+3. VM: `sudo ip addr del 192.168.10.20/24 dev ens33 && sudo ip addr add 192.168.10.20/24 dev vtest && sudo arping -U -c 3 -I vtest 192.168.10.20`
+4. 호스트: 바로 `Get-NetNeighbor -IPAddress 192.168.10.20` — MAC이 vtest MAC으로 바뀌었으면 **받아들임**, 그대로면 **무시**
+5. 무시였다면 `ping -t 192.168.10.20`으로 복구까지 걸린 시간을 잰다(위 53초 계산 검증)
+
+| 실측 결과 | 조치 |
+|---|---|
+| 받아들임 | 이 설계 그대로 |
+| 무시 | `use_vmac`(VRRP 가상 MAC — VIP가 옮겨도 MAC이 같아 호스트 ARP 갱신이 필요 없다) 채택. 같은 macvlan 시험이 vmnet8에서 통과했다면 가상 MAC 프레임도 전달된다 |
+| macvlan 프레임 자체가 호스트에 안 닿음 | vmnet8이 등록되지 않은 MAC을 걸러 낸다는 뜻 — `use_vmac`도 쓸 수 없다. 이 경우 총괄에 올린다 |
 
 ### 4. 배치 · 리소스
 
