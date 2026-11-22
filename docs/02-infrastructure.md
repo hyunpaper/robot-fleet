@@ -7,6 +7,7 @@
   매니지드를 쓰면 Sentinel 장애 조치 · quorum 재선출 · 해시 체인이 의미를 잃고 M5~M8이 사라진다
 - 쿠버네티스 배포판: **k3s**
 - 인그레스: nginx ingress controller (k3s 기본 Traefik 비활성화)
+- **설비 데이터 유입: 클러스터 밖 HAProxy 2대(keepalived VIP)가 노드를 골라 IngestApi로 분배**(M5~, 아래 "설비 데이터 유입")
 
 ### 단계별 실행 환경
 
@@ -16,7 +17,7 @@
 | **M5 · M6 · M8 · M9** | 집 PC — **VMware VM 3대 k3s** | 3 | 3 | 3 (멤버 3으로 `grow`) | 전기료 |
 | **M6 추가** | 실시간 관제 화면 **+ run 재생 데이터 내보내기 · 정적 재생기**(아래 "외부 공개") | | | | 0원 |
 | **M7 부하 실험** | **AWS** (아래 "M7 — AWS"). **run 전환 기능(`POST /admin/run`)이 선결**(아래 "run 관리") | 3 | 3 | 3 | 회당 $1~2 |
-| **M9 교착 분석 에이전트** | 집 PC 호스트(클러스터 밖) — 로컬 LLM이 **정책 파라미터 수정안**을 근거와 함께 제시(04 "M9 교착 분석 에이전트의 액션 공간") | | | | 0원 |
+| **M9 교착 분석 에이전트** | 집 PC 호스트(클러스터 밖) — 에이전트가 **Claude API**를 호출해 **정책 파라미터 수정안**을 근거와 함께 받는다(04 "M9 교착 분석 에이전트의 액션 공간", 12 "LLM 호출") | | | | API 사용료(야간 수 회) |
 
 > 인프라 서버에는 `rabbitmq_consistent_hash_exchange` 플러그인이 켜져 있어야 한다. 없으면 기동이 실패한다(10 §3).
 
@@ -33,10 +34,11 @@
 | 항목 | 값 | 비고 |
 |---|---|---|
 | 호스트 | Ryzen 5 3500X **6코어 6스레드** · RAM **64GB** | VM에 6 vCPU — 여유 없음. RAM은 VM 24GB, 호스트 40GB |
-| GPU | GTX 1660 Super 6GB | **VM에 넘기지 않는다** — M9 로컬 LLM은 호스트에서 |
+| GPU | GTX 1660 Super 6GB | **쓰지 않는다** — M9 LLM은 별도 서버 없이 Claude API(12 "LLM 호출") |
 | 디스크 | VM 100GB + 스냅샷 + suspend 파일 24GB | 200GB 이상 여유 |
 | 하이퍼바이저 | VMware Workstation Pro | 스냅샷 · suspend. WSL2 · Docker Desktop을 켜면 Hyper-V가 켜져 성능이 떨어진다 |
-| 네트워크 | **NAT(`vmnet8`) 하나**, DHCP 범위 밖 주소를 게스트에서 static — `192.168.10.11~13` | 대역은 `Virtual Network Editor`에서 확인해 맞춘다 |
+| 네트워크 | **NAT(`vmnet8`) 하나**, DHCP 범위 밖 주소를 게스트에서 static — 노드 `192.168.10.11~13`, LB `.21 · .22`, VIP `.20` | 대역은 `Virtual Network Editor`에서 확인해 맞춘다 |
+| LB VM | `lb-1` · `lb-2` — 1 vCPU · 1GiB · 10GB, HAProxy + keepalived | 노드 VM과 별도. 노드 장애 주입에 LB가 같이 죽지 않는다. vCPU 오버커밋 +2(07 오버커밋 수용 결정) |
 | 세션 | 저녁 resume → 작업 → suspend. M8 장애 주입 전에는 **스냅샷** | 전원을 내릴 때는 node-2 · 3 → node-1 순 |
 | 백업 | **VM 스냅샷 + 정기 `pg_dump`** | 인스턴스가 사라지지 않으므로 덤프 · 복원 스크립트가 필요 없다 |
 
@@ -162,6 +164,37 @@ kubectl label node node-1 fleet/pg=true
 | node-1 장애 시 | API 서버가 함께 내려간다 — 기동 중인 pod는 유지, 스케줄링 · 재배치만 정지(08 §10) |
 
 배치와 1대 장애 시 재배치는 08 §10 · §11.
+
+---
+
+## 설비 데이터 유입 — HAProxy (M5~)
+
+설비(Simulator)는 클러스터 밖 공장망에 있고, 이벤트 배치는 **HAProxy가 고른 노드의 IngestApi**로 들어간다.
+IngestApi가 검증 · 멱등 처리 후 RabbitMQ(인프라)에 넣는다. HAProxy는 RabbitMQ에 직접 넣지 않는다.
+
+```
+설비 (Simulator, 집 PC 호스트 · 클러스터 밖)
+   │ HTTP 이벤트 배치 (틱당 1건, 순차)
+   ▼
+VIP 192.168.10.20 ── keepalived ── lb-1 (.21, MASTER) / lb-2 (.22, BACKUP)
+   │ HAProxy: 헬스체크 통과한 노드 중 하나를 요청마다 고른다
+   ├──► node-1 :NodePort ─► IngestApi ─┐
+   ├──► node-2 :NodePort ─► IngestApi ─┼─► RabbitMQ (quorum) ─► EventWorker ─► PostgreSQL
+   └──► node-3 :NodePort ─► IngestApi ─┘
+```
+
+| 결정 | 근거 |
+|---|---|
+| **어느 노드로 보낼지는 HAProxy가 정한다** | IngestApi Service는 `NodePort` + **`externalTrafficPolicy: Local`**. 받은 노드의 pod가 처리하고 kube-proxy가 다른 노드로 다시 넘기지 않는다 |
+| IngestApi **노드당 1개**(3, required anti-affinity) | 모든 노드가 분배 후보가 된다. pod가 없거나 준비가 안 된 노드는 헬스체크에서 빠진다 |
+| 헬스체크 = IngestApi readiness | RabbitMQ 연결 · 토폴로지 준비가 안 된 인스턴스로 보내지 않는다 |
+| 요청 단위 분배 | IngestApi는 상태가 없고 멱등 키가 Redis에 있어, 같은 `batchId` 재전송이 다른 노드로 가도 중복이 생기지 않는다(08 §9 멱등 2단계) |
+| HAProxy 2대 + keepalived VIP | LB 1대 장애에도 유입이 이어진다. 장애 조치 경로가 하나 늘어나므로 M8 시나리오에 넣는다 |
+| **이벤트 수집만** HAProxy를 거친다 | 이동 판정(Simulator → FleetController)은 성공 인스턴스 고정 · 실패 시 교대 · 재전송 규약과 p99 10ms 예산(08 §2 · §5)이 있어 LB를 끼우지 않는다 |
+| 설비는 클러스터 밖 | 공장 설비가 관제 클러스터 밖에 있는 실제 구성과 맞춘다. 노드 장애가 설비를 함께 죽이지 않는다 |
+| M3 · M4 | LB 없음. Simulator가 IngestApi에 직접 보낸다 |
+
+> 클러스터 밖 Simulator가 FleetController 인스턴스에 닿는 방법, HAProxy · keepalived 설정값, 08 §10 · §11 배치 · 리소스 재계산은 중간관리 위임(08 "설비 유입 · LB").
 
 ---
 

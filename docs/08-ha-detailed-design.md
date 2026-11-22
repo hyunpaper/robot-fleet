@@ -754,6 +754,32 @@ FleetController 배치 처리 중 kill은 시점을 고정해야 재현된다. �
 | 17 | 리소스 숫자 | 02 "고가용성 구성" 표 기준 (Redis 100m/256Mi, Sentinel 50m/32Mi, RabbitMQ 300m/512Mi, Prometheus 300m/512Mi) |
 | 18 | 바닥글 | `docs/01 · 02 · 07 · 08 기준` |
 
+**설비 유입 · LB 추가(07 사용자 확정, 02 "설비 데이터 유입").** 위 3 · 15번은 아래 19 · 23번으로 대체한다.
+
+| # | 요소 | 내용 |
+|---|---|---|
+| 19 | 설비 상자 (클러스터 밖, 왼쪽) | `설비 · Simulator ×1 · 집 PC 호스트 · 공장망` — 노드 띠 밖. node-2 부제에서 Simulator를 뺀다 |
+| 20 | LB 상자 (클러스터 밖, 설비와 노드 사이) | `lb-1 (.21) MASTER · lb-2 (.22) BACKUP · HAProxy + keepalived · VIP 192.168.10.20` |
+| 21 | 화살표 설비 → VIP | 굵은 실선 `② 이벤트 배치 · HTTP · 틱당 1건 · 순차` |
+| 22 | 화살표 VIP → node-1 · 2 · 3 IngestApi | 세 갈래 `NodePort · externalTrafficPolicy: Local · 헬스체크(readiness) · 노드 선택은 HAProxy` |
+| 23 | 화살표 설비 → FleetController | `① 배치 이동 판정 · HTTP 동기 · LB 미경유 · 실패 시 교대 · 재전송` |
+| 24 | 화살표 IngestApi → RabbitMQ → EventWorker → PostgreSQL | `confirm 후 202 · 파티션 16 · quorum` — 데이터가 인프라에 들어가는 경로가 끝까지 보이게 |
+| 25 | IngestApi 표기 | 노드마다 `IngestApi ×1 (노드당 1, required)` |
+| 26 | 범례 | `클러스터 밖`(점선 테두리) 추가 |
+
+## 설비 유입 · LB (중간관리 위임)
+
+큰 틀은 02 "설비 데이터 유입". 아래를 상세 설계로 채우고 §10 · §11 · §12를 갱신한다.
+
+| # | 항목 |
+|---|---|
+| 1 | 클러스터 밖 Simulator → FleetController 경로: headless DNS를 못 쓰므로 인스턴스 노출 · 목록 갱신 방식(성공 인스턴스 고정 · 실패 시 교대 · 재전송 규약 유지) |
+| 2 | HAProxy 설정값: 분배 방식, 헬스체크 경로 · 주기 · 판정 횟수, 타임아웃, 재시도 금지 여부(재전송은 Simulator가 같은 `batchId`로 한다) |
+| 3 | keepalived: VRRP 방식(유니캐스트 피어), 우선순위, HAProxy 프로세스 추적, VIP 이동 시간 |
+| 4 | §10 배치 · §11 리소스: Simulator 제거, IngestApi 노드당 1(3), 노드 1대 장애 재배치 표 |
+| 5 | §12 M8 시나리오 추가: `lb-1` 정지(VIP 이동), IngestApi 노드 장애 시 분배 제외. 합격 기준 유실 0 · 중복 0 |
+| 6 | M7(AWS)에서 설비 · LB 위치 |
+
 ## 메트릭 · 알림 추가
 
 | 메트릭 | 종류 | 주체 |
