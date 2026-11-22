@@ -184,7 +184,8 @@ API · 스키마 상세는 중간관리, 시안 · 구성도는 하위 작업이
 |---|---|
 | 관제 뷰 + QueryApi 조회 · WebSocket | 시연 때만 터널(02 그대로) |
 | 관리 콘솔 + ControlApi | **내부 호스트 전용.** 터널에 등록하지 않고, ingress에서 내부 대역(192.168.10.0/24, 호스트) 허용 목록으로 한 번 더 막는다 |
-| Simulator `POST /admin/run` · EventWorker 관리 포트 | 지금처럼 인그레스에 올리지 않는다. ControlApi가 클러스터 안에서만 부른다 |
+| Simulator `POST /admin/run` | Simulator는 클러스터 밖(집 PC 호스트, 02 "설비 데이터 유입")이다. 관리 포트는 **호스트 방화벽에서 vmnet8 대역(192.168.10.0/24)만 허용**하고 인그레스 · 터널에 올리지 않는다. ControlApi가 클러스터에서 호스트로 부른다 |
+| EventWorker 관리 포트 | 지금처럼 인그레스에 올리지 않는다. ControlApi가 클러스터 안에서만 부른다 |
 | Prometheus · Grafana 편집 · RabbitMQ 관리 · DB · Redis | 노출 금지(02) |
 
 ---

@@ -199,3 +199,6 @@ Redis · RabbitMQ 멤버는 세 노드 전부에 있고, 노드별 차이는 k3s
 | 사용자 확정 (갱신) | M9 LLM: 집 PC 로컬 LLM(GPU) → **Claude API 호출** | 별도 LLM 서버를 두지 않는다. 에이전트 위치(집 PC 호스트) · 규칙 · 검증 · 실행 경계(ControlApi)는 그대로다. 보내는 데이터는 사실 스냅샷과 등급 A 표뿐. 요청 조립 · 응답 파싱 · 호출 경계를 먼저 구현하고 실제 연결은 비워 둔다(12 "LLM 호출") |
 | 사용자 확정 | 설비 데이터 유입은 HAProxy 로드밸런싱, 노드 선택은 HAProxy | 클러스터 밖 LB VM 2대(HAProxy + keepalived VIP)가 헬스체크로 노드를 골라 IngestApi(NodePort, `externalTrafficPolicy: Local`, 노드당 1)로 보낸다. 이벤트 수집만 해당, 이동 판정 경로는 그대로(02 "설비 데이터 유입") |
 | 사용자 확정 (갱신) | Simulator는 node-1을 피한다(node-2 · 3) → **클러스터 밖(집 PC 호스트)** | 설비는 공장망에 있다. 노드 장애가 틱을 직접 끊지 않는다. 08 §10 · §11 배치 · 수치와 M8 시나리오는 중간관리가 갱신 |
+| 총괄 결정 | 클러스터 밖 Simulator → FleetController는 **노드 IP + hostPort**(Service 없음, 주소 3개 고정) | NodePort + `externalTrafficPolicy: Local`은 pod 없는 노드가 패킷을 버려 시도 타임아웃을 다 쓴다. hostPort는 노드당 1을 보장하고 빈 노드가 즉시 거부한다. 연결 거부는 시도 횟수에 세지 않는다(08 "설비 유입 · LB", §5) |
+| 총괄 결정 | LB VM 설정은 저장소에 파일로 두지 않는다 | 서버 구성 파일 금지 원칙. 08 "설비 유입 · LB"의 haproxy.cfg · keepalived.conf 발췌가 정본이고 사용자가 설치한다 |
+| 총괄 결정 | EventWorker HPA 상한 3 유지 | Simulator가 빠져 상한 4도 장애 후 4 vCPU 안이지만, 호스트 6코어를 LB VM · Simulator와 나눠 쓴다(02 "리소스 배분") |

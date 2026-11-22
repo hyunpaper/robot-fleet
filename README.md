@@ -121,6 +121,7 @@ Simulator ──(틱마다 배치 이동 요청)──► FleetController ◄─
 | [10-m3-detailed-design](docs/10-m3-detailed-design.md) | 이벤트 계약, 발행 확인, 워커 배치·배정, 스키마, 테스트 목록, 작업 분할 |
 | [12-control-console](docs/12-control-console.md) | 관제 화면 · MES형 뷰, 에이전트 제안 승인, 요청 서비스(ControlApi) |
 | [13-m2-deadlock](docs/13-m2-deadlock.md) | 교착 탐지·양보·재시도, 해소 락, 재계획 규칙, 교착 이벤트 |
+| [14-m9-llm-client](docs/14-m9-llm-client.md) | M9 LLM 호출 계층: 등급 A 카탈로그, 사실 스냅샷·제안 초안 계약, 프롬프트·스키마, 응답 파싱, 호출 경계 |
 
 ---
 
