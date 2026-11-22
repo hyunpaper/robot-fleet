@@ -16,7 +16,7 @@
 | C3 | 재전송 기록 키 `(mapId, tick)`, TTL 수 틱 | 맵 해시 안에 **최신 1틱 기록만** 둔다. 다음 틱 커밋이 덮어쓴다 | Simulator는 응답을 받기 전에 다음 틱을 보내지 않고, 다음 틱을 보낸 뒤에는 이전 틱을 다시 보내지 않는다. 기록 = 워터마크가 되어 별도 TTL 조정이 필요 없다 |
 | C4 | (01) Redis 왕복 배치당 1회(Lua) | 배치당 **2회**: 읽기 Lua 1 + 커밋 Lua 1(`WAIT`는 커밋과 파이프라인) | 판정 기록에 교착 해소 결과까지 넣어야 락과 같은 원자 단위가 된다. 교착 탐지는 락 결과를 본 뒤에야 가능하므로 "읽기 → 메모리 판정 → 원자 커밋"으로 나눈다 |
 | C5 | (01) 칸별 락 키, 논리 20틱 + 실시간 TTL 만료 | 맵당 **단일 해시**, 칸별 만료 폐지. 해제는 명시적으로만 | 기존 규칙에 결함 두 개: ① 이동 요청을 보내지 않는 정지 로봇(Idle·Loading)의 칸 락이 20틱 뒤 만료되어 다른 로봇이 그 칸을 승인받는다. ② 틱 정지가 실시간 TTL(배속 1에서 2초)보다 길면 칸 락이 일부만 사라져 구멍이 생긴다. 단일 키는 통째로만 만료되므로 구멍이 생기지 않는다 |
-| C6 | 틱마다 로드밸런서가 임의 인스턴스로 | **headless Service + Simulator 측 선택.** 성공한 인스턴스에 고정, 실패 · 409 시 다른 인스턴스로 | ClusterIP는 HTTP keep-alive 연결 하나에 고정되어 교대가 안 되고, 재전송이 같은 죽은 pod로 갈 수 있다. node-1(API 서버) 다운 시 endpoint 갱신이 멈춰 죽은 pod가 Service에 남는다 |
+| C6 | 틱마다 로드밸런서가 임의 인스턴스로 | **고정 주소 목록 + Simulator 측 선택.** 성공한 인스턴스에 고정, 실패 · 409 시 다른 인스턴스로. M5~ 주소는 노드 IP + FleetController `hostPort`(아래 "설비 유입 · LB" 1) | ClusterIP는 HTTP keep-alive 연결 하나에 고정되어 교대가 안 되고, 재전송이 같은 죽은 pod로 갈 수 있다. node-1(API 서버) 다운 시 endpoint 갱신이 멈춰 죽은 pod가 Service에 남는다. Simulator가 클러스터 밖이라 headless DNS(pod IP)는 닿지 않는다 |
 | C7 | (01) Ingest 멱등 키 실패 처리 없음 | Redis 오류 시 1단계를 **건너뛰고 발행**(fail-open) | 07 정합성 원칙에서 `idem:*`은 유실 허용, 중복은 워커가 막는다. Redis 장애 조치(최대 30초) 동안 이벤트 파이프라인을 세울 이유가 없다 |
 
 ---
@@ -410,7 +410,8 @@ FC-A가 tick T를 처리하다 죽거나 멈추고, Simulator가 같은 본문�
 | 시도 타임아웃 | **100ms** | 판정 p99 10ms의 10배. 배속 1에서 1틱 |
 | 시도 횟수 | **3** (최초 1 + 재시도 2) | 두 인스턴스에 각 1회 이상 + 1회 여유. 소진까지 최대 약 320ms |
 | 백오프 | 0ms → 20ms | 첫 재시도는 다른 인스턴스로 즉시 |
-| 대상 선택 | **성공한 인스턴스에 고정**. 실패(타임아웃 · 연결 · 503) 또는 409일 때만 다른 인스턴스로 바꾼다 | C6. 틱마다 교대하면 분리 비대칭(§3)에서 두 저장소를 번갈아 밟아 재주장 핑퐁이 매 틱 난다. 고정하면 한쪽에서 안정된다. headless DNS 2초 갱신, 실패 시 마지막 목록 유지 |
+| 대상 선택 | **성공한 인스턴스에 고정**. 실패(타임아웃 · 연결 · 503) 또는 409일 때만 다른 인스턴스로 바꾼다 | C6. 틱마다 교대하면 분리 비대칭(§3)에서 두 저장소를 번갈아 밟아 재주장 핑퐁이 매 틱 난다. 고정하면 한쪽에서 안정된다. 주소는 설정의 고정 목록(갱신 없음, "설비 유입 · LB" 1) |
+| 연결 거부 | 즉시 다음 주소로. **시도 횟수에 세지 않는다**. 한 시도 안에서 주소가 모두 거부면 그 시도를 실패로 센다 | 노드 3대에 FleetController 2대라 빈 주소가 하나 있다. 요청이 전달되지 않았으므로 멱등 · 체인과 무관하고, 빈 주소가 시도 3회를 갉아먹지 않는다 |
 | 재시도 대상 오류 | 타임아웃, 연결 실패, 503 | 409는 재시도하지 않는다 → 재주장 |
 | 소진 시 | **틱 정지.** 500ms마다 같은 본문으로 탐침 | 30초 예산에서 탐침 지연 ≤ 0.5초 |
 | 409 | 재주장(`epoch` 새로 발급) → 성공 시 같은 tick을 새 `epoch` · `prev`로 판정 | 01 복구 절차 |
@@ -425,7 +426,7 @@ FleetController 쪽 짝 설정:
 | 설정 | 값 | 근거 |
 |---|---|---|
 | readiness | 프로세스 준비만. **Redis 연결을 보지 않는다** | Redis 장애 중에도 Simulator가 FleetController에 닿아 503/409를 받아야 탐침이 돈다. 02의 일반 규칙(의존성 = readiness)의 예외 |
-| `preStop` | `sleep 3` | Simulator DNS 갱신(2초) 전에 사라지지 않게 |
+| `preStop` | 없음 | DNS 갱신 대기가 이유였는데 고정 주소 목록이라 대기할 것이 없다. 진행 중 배치는 Kestrel 정상 종료가 마치고, 다음 요청은 연결 실패 → 교대 |
 | `terminationGracePeriodSeconds` | 10 | 진행 중 배치를 마친다 |
 
 ---
@@ -578,26 +579,29 @@ telemetry만 있는 배치는 항상 `done`이다.
 
 | 노드 | 데이터 계층 | 애플리케이션 |
 |---|---|---|
-| node-1 | Redis · Sentinel · RabbitMQ | PostgreSQL · nginx ingress · EventWorker(증설분) |
-| node-2 | Redis · Sentinel · RabbitMQ | **Simulator** · FleetController · IngestApi · EventWorker · QueryApi |
+| node-1 | Redis · Sentinel · RabbitMQ | PostgreSQL · nginx ingress · IngestApi · EventWorker(증설분) |
+| node-2 | Redis · Sentinel · RabbitMQ | FleetController · IngestApi · EventWorker · QueryApi |
 | node-3 | Redis · Sentinel · RabbitMQ | FleetController · IngestApi · EventWorker · Prometheus · Grafana |
+| 클러스터 밖 | — | **Simulator**(집 PC 호스트) · `lb-1` · `lb-2`(HAProxy + keepalived, 별도 VM) |
 
 | 워크로드 | 종류 · 수 | anti-affinity | PDB | 비고 |
 |---|---|---|---|---|
 | Redis | StatefulSet 3 | **required**, `topologyKey: kubernetes.io/hostname` | maxUnavailable 1 | init 컨테이너가 Sentinel에 primary를 묻고 역할 결정(아래) |
 | Sentinel | StatefulSet 3 | **required** | maxUnavailable 1 | Redis와 별도 StatefulSet — "Sentinel 1 kill"을 독립 시험 |
 | RabbitMQ | StatefulSet 3, `podManagementPolicy: Parallel` | **required** | maxUnavailable 1 | peer discovery k8s 플러그인 |
-| FleetController | Deployment 2 | **preferred** (weight 100) | minAvailable 1 | headless Service 추가(C6) |
+| FleetController | Deployment 2 | 노드당 최대 1 — **`hostPort: 18080`** 충돌로 스케줄러가 보장 | minAvailable 1 | preferred nodeAffinity `NotIn node-1`(weight 100). Service 없음. 롤링 `maxSurge 1 · maxUnavailable 0` ("설비 유입 · LB" 1) |
+| IngestApi | Deployment 3 | **required** | maxUnavailable 1 | Service `NodePort 30080` · `externalTrafficPolicy: Local`. 롤링 `maxSurge 0 · maxUnavailable 1`, `preStop sleep 4` ("설비 유입 · LB" 2) |
 | PostgreSQL | StatefulSet 1 | — | — | `nodeSelector: fleet/pg=true` (node-1). 07 범위 밖 |
-| Simulator | Deployment 1 (Recreate) | — | — | **required nodeAffinity `kubernetes.io/hostname NotIn node-1`** — node-2 · 3 중 어디든(특정 노드 고정 안 함). 위 배치 표의 node-2는 정상 시 위치 |
 | CoreDNS | 2 | preferred | — | k3s 기본 1. 노드 하나가 죽어도 DNS가 남게 |
 
 | 결정 | 근거 |
 |---|---|
 | 데이터 계층은 required — 노드당 1개 | 같은 노드에 둘이 뜨면 그 노드 장애에 과반이 깨진다. 차라리 Pending이 낫다 |
-| FleetController는 preferred | 노드 2개가 내려간 상태에서도 1대는 떠야 한다. 2대가 한 노드에 몰리는 건 일시적 |
+| FleetController는 hostPort로 노드당 최대 1 | 노드 IP:18080이 pod 하나와 1:1이어야 Simulator의 "성공 인스턴스 고정"이 성립한다. 노드 2개가 내려가도 남은 노드에 1대는 뜬다(기존 preferred anti-affinity의 목적 유지) |
+| FleetController는 node-1을 preferred로 피한다 | node-1 장애 시 재배치가 멈춘다. node-2 · 3에 두면 node-1 장애에도 2대가 유지된다. required면 node-2 · 3 중 하나가 죽었을 때 옮겨 갈 곳이 없다 |
+| IngestApi는 required — 노드당 1 | 모든 노드가 HAProxy 분배 후보가 된다(02 "설비 데이터 유입"). 노드가 빠지면 그 노드 몫은 **Pending**이고 HAProxy가 분배에서 뺀다 |
 | 노드가 빠지면 그 노드의 데이터 pod는 **Pending** | local PV가 노드에 묶여 있고 다른 노드엔 이미 같은 종류가 있다. 의도된 동작. 남은 2개로 과반 유지 |
-| Simulator는 node-1을 피한다 | node-1은 API 서버를 겸해 장애 시 재배치가 정지한다. Simulator가 node-1에 있으면 node-1 장애 = 틱 정지 + 복귀까지 재기동 불가가 된다. node-2 · 3에 두면 node-1 장애에도 틱이 유지된다. 특정 노드에 고정하지 않아 node-2 · 3 장애 시에는 다른 쪽으로 재배치(새 `epoch`) |
+| Simulator는 클러스터 밖 (07 결정 로그) | 노드 장애가 틱을 직접 끊지 않는다. 노드 장애가 Simulator에 미치는 영향은 FleetController 교대 · Redis 장애 조치 · 이벤트 재전송뿐이고 재배치 · 새 `epoch`가 없다. 집 PC 호스트 장애는 VM까지 함께 멈추므로 범위 밖 |
 | RabbitMQ 멤버 3 유지 | 노드 3대가 이미 확보된 이상 추가 부담은 1Gi뿐이다. 잃는 것(M8 leader kill 시나리오, "task · conflict 유실 0을 Raft로 증명")이 더 크다 |
 
 Redis 역할 결정(init):
@@ -610,11 +614,11 @@ Redis 역할 결정(init):
 
 ### 노드 1개 다운 시 과반
 
-| 다운 노드 | Redis | Sentinel (quorum 2) | RabbitMQ quorum | FleetController | 그 밖 |
-|---|---|---|---|---|---|
-| node-1 | 2/3 · primary였으면 장애 조치 | 2/3 · 합의 · 선출 가능 | 2/3 · 리더 재선출 | 2/2 | **API 서버 동반 정지** — 다른 노드의 pod는 유지, 스케줄링 · 재배치 · endpoint 갱신 정지, `kubectl` 불가. PostgreSQL 정지(이벤트는 quorum queue에 적체 후 복구 시 소비). **Simulator는 node-2 · 3에 있어 틱 유지** — Redis primary가 node-1에 있었으면 장애 조치 동안만 정지 |
-| node-2 | 2/3 | 2/3 | 2/3 | 1/2 이상 | Simulator가 있었다면 node-3으로 재배치 · 재시작 = 새 `epoch` (07 범위 밖) |
-| node-3 | 2/3 | 2/3 | 2/3 | 1/2 이상 | 모니터링 정지(Prometheus Pending → 측정 중이면 지표에 공백) |
+| 다운 노드 | Redis | Sentinel (quorum 2) | RabbitMQ quorum | FleetController | IngestApi (HAProxy 분배) | 그 밖 |
+|---|---|---|---|---|---|---|
+| node-1 | 2/3 · primary였으면 장애 조치 | 2/3 · 합의 · 선출 가능 | 2/3 · 리더 재선출 | 2/2 | 2/3 — node-1 DOWN, 재배치 없음(API 서버 정지) | **API 서버 동반 정지** — 다른 노드의 pod는 유지, 스케줄링 · 재배치 · endpoint 갱신 정지, `kubectl` 불가. PostgreSQL 정지(이벤트는 quorum queue에 적체 후 복구 시 소비). **Simulator는 클러스터 밖이라 틱 유지** — Redis primary가 node-1에 있었으면 장애 조치 동안만 정지 |
+| node-2 | 2/3 | 2/3 | 2/3 | 1/2 → node-1로 재배치 후 2/2 | 2/3 — 1개 Pending(required) | Simulator는 node-3 주소로 교대(§5) |
+| node-3 | 2/3 | 2/3 | 2/3 | 1/2 → node-1로 재배치 후 2/2 | 2/3 — 1개 Pending | Simulator는 node-2 주소로 교대(§5). 모니터링 정지(Prometheus Pending → 측정 중이면 지표에 공백) |
 
 그 사이 추가 1대 장애는 **버티지 못한다**(과반 붕괴, 07 설계상 한계).
 
@@ -646,55 +650,62 @@ PV의 `nodeAffinity`는 노드명(`values: [node-1]` 등)을 가리키므로 **k
 ## 11. 리소스 표 근거
 
 표 자체는 02 "고가용성 구성 (M5 + M6)". **기본**(노드 4GiB, 모니터링 없음)과 **실험**(노드 8GiB, Prometheus · Grafana 포함) 두 구성이다.
-request 합 **5.41Gi(기본, EventWorker 3) / 6.16Gi(실험)**, limit = request × 2.
+request 합 **5.16Gi(기본, EventWorker 3) / 5.91Gi(실험)**, limit = request × 2.
+Simulator는 클러스터 밖이라 표에서 빠지고(−512Mi · −500m), IngestApi가 노드당 1로 3개가 된다(+256Mi · +200m).
 
 | 결정 | 근거 |
 |---|---|
-| EventWorker를 HPA 최대(**4**)로 합산하면 | 기본 5.66Gi / 실험 6.41Gi, CPU 4.95 core. 아래 노드별 표는 상한 3(02 HPA) 기준이다 |
+| EventWorker를 HPA 최대(**4**)로 합산하면 | 기본 5.41Gi / 실험 6.16Gi, CPU 4.65 core. 아래 노드별 표는 상한 3(02 HPA) 기준이다 |
 | Sentinel 32Mi | 상태가 거의 없는 프로세스. 실측 10Mi 안팎 |
 | RabbitMQ 512Mi (limit 1Gi) | quorum 32 + WAL 64MB 제한. 워터마크 0.6이 limit 안에서 역압을 건다 |
 | Redis 256Mi (limit 512Mi) | `maxmemory` 192mb + AOF rewrite fork 여유 |
 | 노드 시스템 예약 0.6Gi | OS + k3s(server · agent) + kube-proxy · flannel · node_exporter 실사용. k3s 설치 시 `--kubelet-arg=system-reserved=memory=600Mi`로 명시해 allocatable을 **기본 3.4Gi / 실험 7.4Gi**로 고정 |
 | MinIO 제외 | 선택 항목. 쓰면 그만큼 여유에서 뺀다 |
 | Prometheus는 node-3 local-path PVC, 보존 **2일** | 실험 구성에만 뜬다. node-3 장애 시 Pending(모니터링 정지 — §10 과반 표와 같음) |
-| Simulator는 node-1 밖(§10) | 아래 표의 node-2 위치는 정상 시 배치. 총괄 결정으로 node-1 회피(지시서 범위 밖) |
+| IngestApi 3 | required anti-affinity 노드당 1(§10). 노드가 빠지면 그 몫은 Pending이라 재배치 request에 들어가지 않는다 |
+| FleetController는 node-2 · 3 | preferred nodeAffinity `NotIn node-1`(§10). 장애 시 hostPort가 비어 있는 노드(정상 시 node-1)로만 옮겨 간다 |
+| 호스트 CPU는 줄지 않는다 | Simulator가 VM 밖 호스트 프로세스가 되었을 뿐 같은 6코어를 쓴다. LB VM 2대(1 vCPU씩)도 같은 호스트다(07 오버커밋 수용 결정) |
 
 ### 정상 시 노드별 request
 
-| 노드 | 배치 (애플리케이션) | 기본 | ≤ 3.4Gi · 여유 | 실험 | ≤ 7.4Gi · 여유 |
-|---|---|---|---|---|---|
-| node-1 | PostgreSQL · nginx · EventWorker(증설분) | 1.66Gi | ✓ 1.76Gi | 1.66Gi | ✓ 5.74Gi |
-| node-2 | Simulator · FleetController · IngestApi · EventWorker · QueryApi | 2.22Gi | ✓ 1.20Gi | 2.22Gi | ✓ 5.18Gi |
-| node-3 | FleetController · IngestApi · EventWorker (+ 실험: Prometheus · Grafana) | 1.53Gi | ✓ 1.88Gi | 2.28Gi | ✓ 5.12Gi |
-| **합계** | | **5.41Gi** | | **6.16Gi** | |
+| 노드 | 배치 (애플리케이션) | 기본 | ≤ 3.4Gi · 여유 | 실험 | ≤ 7.4Gi · 여유 | CPU (기본 / 실험) |
+|---|---|---|---|---|---|---|
+| node-1 | PostgreSQL · nginx · IngestApi · EventWorker(증설분) | 1.91Gi | ✓ 1.49Gi | 1.91Gi | ✓ 5.49Gi | 1.55 / 1.55 core |
+| node-2 | FleetController · IngestApi · EventWorker · QueryApi | 1.72Gi | ✓ 1.68Gi | 1.72Gi | ✓ 5.68Gi | 1.25 / 1.25 core |
+| node-3 | FleetController · IngestApi · EventWorker (+ 실험: Prometheus · Grafana) | 1.53Gi | ✓ 1.87Gi | 2.28Gi | ✓ 5.12Gi | 1.15 / 1.55 core |
+| **합계** | | **5.16Gi** | | **5.91Gi** | | **3.95 / 4.35 core** |
 
-노드마다 데이터 멤버(Redis · Sentinel · RabbitMQ 0.78Gi)가 포함돼 있다.
+노드마다 데이터 멤버(Redis · Sentinel · RabbitMQ 0.78Gi · 0.45 core)가 포함돼 있다.
 
 ### 노드 1대 장애 시 재배치 (EventWorker 3)
 
 남은 2대 allocatable = 기본 2 × 3.4Gi = **6.8Gi**, 실험 2 × 7.4Gi = **14.8Gi**.
-죽은 노드의 데이터 멤버 3개(0.78Gi)는 local PV + required anti-affinity로 **의도적으로 Pending**이다.
+죽은 노드의 데이터 멤버 3개(0.78Gi)와 IngestApi(0.25Gi)는 local PV · required anti-affinity로 **의도적으로 Pending**이다.
+노드당 최악은 재배치 pod가 한 노드에 모두 몰린 경우다(FleetController는 hostPort 때문에 빈 노드로만 간다).
 
-| 장애 | 재배치할 pod | 재배치 request (기본 / 실험) | 남은 2대 합 (기본 / 실험) | 노드당 (기본 / 실험) | Pending | 비고 |
+| 장애 | 재배치할 pod | 재배치 request (기본 / 실험) | 남은 2대 합 (기본 / 실험) | 노드당 최악 (기본 / 실험) | Pending | 비고 |
 |---|---|---|---|---|---|---|
-| node-1 | nginx · EventWorker | 0.38Gi / 0.38Gi | 4.13Gi / 4.88Gi | 2.06Gi / 2.44Gi | 데이터 멤버 3, **PostgreSQL** | **API 서버 동반 정지** — 이 재배치는 node-1 복귀까지 일어나지 않는다(아래). Simulator는 영향 없음 |
-| node-2 | Simulator · FleetController · IngestApi · QueryApi · EventWorker | 1.44Gi / 1.44Gi | 4.63Gi / 5.38Gi | 2.31Gi / 2.69Gi | 데이터 멤버 3 | Simulator는 node-3으로(nodeAffinity) |
-| node-3 | FleetController · IngestApi · EventWorker (+ 실험: Grafana) | 0.75Gi / 1.00Gi | 4.63Gi / 4.88Gi | 2.31Gi / 2.44Gi | 데이터 멤버 3 (+ 실험: **Prometheus**) | |
+| node-1 | nginx · EventWorker | 0.38Gi / 0.38Gi | 3.63Gi / 4.38Gi | 2.09Gi / 2.66Gi | 데이터 멤버 3, **PostgreSQL**, IngestApi | **API 서버 동반 정지** — 이 재배치는 node-1 복귀까지 일어나지 않는다(아래). Simulator는 클러스터 밖이라 영향 없음 |
+| node-2 | FleetController · EventWorker · QueryApi | 0.69Gi / 0.69Gi | 4.13Gi / 4.88Gi | 2.59Gi / 2.72Gi | 데이터 멤버 3, IngestApi | FleetController는 node-1로(hostPort) |
+| node-3 | FleetController · EventWorker (+ 실험: Grafana) | 0.50Gi / 0.75Gi | 4.13Gi / 4.38Gi | 2.41Gi / 2.66Gi | 데이터 멤버 3, IngestApi (+ 실험: **Prometheus**) | FleetController는 node-1로(hostPort) |
 
-모두 남은 2대 allocatable(6.8Gi / 14.8Gi) 안이다. 노드당 값은 균등 분산 기준이며, 기본 구성의 노드당 상한 3.4Gi 안에 든다.
+모두 남은 2대 allocatable(6.8Gi / 14.8Gi) 안이고, 노드당 최악도 기본 3.4Gi 안이다.
 
 node-1은 k3s server를 겸하므로 **API 서버가 함께 내려간다.**
 
 | 항목 | 영향 |
 |---|---|
-| 이미 떠 있는 pod | node-2 · 3의 kubelet이 계속 실행. Redis · RabbitMQ · Simulator · FleetController 동작 유지 → **틱 유지** |
+| 이미 떠 있는 pod | node-2 · 3의 kubelet이 계속 실행. Redis · RabbitMQ · FleetController · IngestApi 동작 유지 → **틱 유지**(Simulator는 클러스터 밖) |
 | 스케줄링 · 재배치 | **정지**. 위 표의 재배치가 node-1 복귀까지 일어나지 않는다 |
 | `kubectl` | 불가 |
 | 과반 | Redis · Sentinel · RabbitMQ 모두 2/3로 유지 |
+| 설비 유입 | HAProxy가 node-1을 DOWN으로 빼고 node-2 · 3 IngestApi로 분배 |
 
 전용 control plane을 없앤 대가로 생긴 유일한 트레이드오프다. M8 시나리오로 측정해 문서화한다(§12).
 
-CPU는 **실험 구성 기준** 노드당 4 vCPU(기본 구성은 2 vCPU). request 합 4.95 core, 1대 장애 후 남은 8 vCPU 안이다(M5 확인).
+CPU는 **실험 구성 기준** 노드당 4 vCPU(기본 구성은 2 vCPU). request 합 4.35 core, 1대 장애 후 Pending을 뺀 3.20~3.70 core가 남은 8 vCPU 안이다.
+기본 구성은 3.95 core, 1대 장애 후 2.80~3.30 core가 남은 4 vCPU 안이다. node-2 장애 시 node-1이 FleetController를 받아 1.75 core가 되고,
+EventWorker · QueryApi는 CPU request 때문에 node-3으로 간다(M5 확인).
 
 ---
 
@@ -711,6 +722,14 @@ CPU는 **실험 구성 기준** 노드당 4 vCPU(기본 구성은 2 vCPU). reque
 | **telemetry 유실 수** | Simulator 발행 telemetry 수 − `robot_telemetry` 행 수 | 대조 SQL + `fleet_telemetry_dropped_total` |
 | 장애 조치 시간 | Sentinel `+sdown` ~ `+switch-master` | Sentinel 로그 |
 | 재전송 결과 | 재전송된 tick마다 Simulator가 적용한 응답 다이제스트 = Redis `wd` | Simulator · FleetController 로그의 `(tick, digest)` 대조 |
+| **유입 중단 시간** | 이벤트 배치 첫 송신 실패 시각 ~ 다음 202 시각 | `fleet_event_send_stall_seconds` 히스토그램(Simulator) + 송신 로그 |
+| 송신 재시도 · 버퍼 | 재시도 수, 버퍼 최대 깊이(600 중) | `fleet_event_send_retry_total{reason}` · `fleet_event_buffer_depth` |
+| VIP 이동 시간 | 장애 주입 시각 ~ `lb-2` keepalived `Entering MASTER STATE` | 장애 주입 스크립트의 시각 + `lb-2` journald |
+| HAProxy 분배 제외 시간 | 장애 주입 시각 ~ 그 server `DOWN` | HAProxy 로그(`Server ingest_api/node-N is DOWN`) · `haproxy_server_status` |
+| HAProxy 재분배 · 오류 | 연결 실패 재시도 수, 클라이언트에 낸 5xx 수 | `haproxy_backend_retry_warnings_total` · `haproxy_backend_redispatch_warnings_total` · `haproxy_backend_http_responses_total{code="5xx"}` |
+
+Simulator는 클러스터 밖이라 Prometheus가 pod annotation으로 찾지 못한다. `static_configs`에 호스트의 vmnet8 주소와
+`--metrics-port`를 적고, 호스트 방화벽은 vmnet8 대역에서 그 포트만 연다. HAProxy 2대도 `:8404/metrics`를 같은 방식으로 수집한다.
 
 FleetController 배치 처리 중 kill은 시점을 고정해야 재현된다. 시험 빌드 전용 환경 변수
 `FLEET_FAULT_KILL_AT=after-read|after-commit|before-response`와 확률 `FLEET_FAULT_KILL_P`로 §4 표 2 · 4 · 5번을 각각 100회 반복하고,
@@ -723,8 +742,11 @@ FleetController 배치 처리 중 kill은 시점을 고정해야 재현된다. �
 | 노드 drain | **node-2 또는 node-3** (node-1은 API 서버라 drain 중 스케줄링을 잃는다) | 위 표 전 지표 |
 | **node-1(API 서버) 장애** | node-1 VM 정지 | 다른 노드의 pod 계속 동작 · **Simulator · FleetController 틱 유지** · 스케줄링 정지 확인, 틱 정지 시간 · 겹침 0. 합격: 겹침 0, 틱 정지 ≤ 30초(node-1에 Redis primary가 있었을 때만 정지) |
 | **노드 강제 소실** | VM 전원 강제 차단(예고 없는 노드 소실). VM 스냅샷을 떠 두고 같은 상태에서 반복 | 겹침 수 · 틱 정지 시간 · 과반 유지 여부 |
+| **`lb-1` 정지 (VIP 이동)** | (a) `lb-1`에서 `systemctl stop haproxy` — keepalived 추적 경로 (b) `lb-1` VM 전원 차단 — VRRP 광고 끊김 경로. 각 20회 | 유입 중단 시간 · VIP 이동 시간 · 송신 재시도 · 버퍼 최대 깊이 · 유실 · 중복. 합격: task · conflict · telemetry 유실 0, 중복 0, 틱 정지 0, 유입 중단 ≤ 15초 |
+| **IngestApi 분배 제외** | (a) `kubectl delete pod ingest-api-N --grace-period=0 --force` — pod 단위 (b) node-2 또는 node-3 VM 전원 차단 — 노드 단위(노드 강제 소실과 같은 실행에서 함께 측정). 각 20회 | 분배 제외 시간 · HAProxy 재분배 · 5xx · 유입 중단 시간 · 유실 · 중복. 합격: task · conflict 유실 0, 중복 0, 유입 중단 ≤ 10초, (a)는 틱 정지 0 |
 
 합격 기준은 모든 행 공통으로 **겹침 0**, Redis · drain 계열은 **틱 정지 ≤ 30초**를 유지한다.
+LB · IngestApi 행의 유입 중단 상한은 Simulator 버퍼 60초(600배치)보다 충분히 짧아 틱이 멈추지 않는 범위다. 근거 계산은 "설비 유입 · LB" 3 · 5.
 로컬 VM이라 소실 시점을 통제할 수 있어, 전원 차단이 합격 / 불합격 판정이 가능한 시나리오가 된다.
 
 ---
@@ -740,7 +762,7 @@ FleetController 배치 처리 중 kill은 시점을 고정해야 재현된다. �
 | 3 | node-2 부제 | `k3s agent` — Simulator(`NotIn node-1`) · FleetController · IngestApi · EventWorker · QueryApi + 데이터 멤버 |
 | 4 | node-3 부제 | `k3s agent · 모니터링(실험 구성)` — FleetController · IngestApi · EventWorker · Prometheus · Grafana + 데이터 멤버 |
 | 5 | 상단 부제 | `k3s 노드 3대 · 네임스페이스 4개` |
-| 6 | FleetController 상자 | `×2 (상한) · 판정 /move-requests/batch · 경로 /paths/batch · 재전송 멱등 · 서로 다른 노드(preferred) · 200m / 256Mi` |
+| 6 | FleetController 상자 | `×2 (상한) · 판정 /move-requests/batch · 경로 /paths/batch · 재전송 멱등 · hostPort 18080 · 노드당 최대 1 · 200m / 256Mi` — node-2 · node-3 띠에 |
 | 7 | Redis 상자 | `primary 1 + replica 2 · AOF everysec · local PV /data/redis · 노드당 1(required)` |
 | 8 | Sentinel | `Sentinel ×3 · quorum 2 · down-after 5s · 노드당 1(required)` |
 | 9 | RabbitMQ 상자 | `×3 클러스터 · task/conflict quorum 32 · telemetry classic 16 · local PV /data/rabbitmq · 노드당 1(required)` |
@@ -750,7 +772,7 @@ FleetController 배치 처리 중 kill은 시점을 고정해야 재현된다. �
 | 13 | 화살표 FleetController → Redis | `읽기 1 + 커밋 1 (+WAIT 1)/배치` |
 | 14 | 화살표 | 점선 `Sentinel → FleetController · IngestApi : primary 탐색` |
 | 15 | 화살표 Simulator → FleetController | `① 배치 이동 판정 · HTTP 동기 · 틱당 1건 · headless · 실패 시 교대 · 재전송` |
-| 16 | 범례 | `required anti-affinity`(데이터 계층) / `preferred`(FleetController) |
+| 16 | 범례 | `required anti-affinity`(데이터 계층 · IngestApi) / `hostPort 노드당 1`(FleetController) |
 | 17 | 리소스 숫자 | 02 "고가용성 구성" 표 기준 (Redis 100m/256Mi, Sentinel 50m/32Mi, RabbitMQ 300m/512Mi, Prometheus 300m/512Mi) |
 | 18 | 바닥글 | `docs/01 · 02 · 07 · 08 기준` |
 
@@ -761,24 +783,196 @@ FleetController 배치 처리 중 kill은 시점을 고정해야 재현된다. �
 | 19 | 설비 상자 (클러스터 밖, 왼쪽) | `설비 · Simulator ×1 · 집 PC 호스트 · 공장망` — 노드 띠 밖. node-2 부제에서 Simulator를 뺀다 |
 | 20 | LB 상자 (클러스터 밖, 설비와 노드 사이) | `lb-1 (.21) MASTER · lb-2 (.22) BACKUP · HAProxy + keepalived · VIP 192.168.10.20` |
 | 21 | 화살표 설비 → VIP | 굵은 실선 `② 이벤트 배치 · HTTP · 틱당 1건 · 순차` |
-| 22 | 화살표 VIP → node-1 · 2 · 3 IngestApi | 세 갈래 `NodePort · externalTrafficPolicy: Local · 헬스체크(readiness) · 노드 선택은 HAProxy` |
-| 23 | 화살표 설비 → FleetController | `① 배치 이동 판정 · HTTP 동기 · LB 미경유 · 실패 시 교대 · 재전송` |
+| 22 | 화살표 VIP → node-1 · 2 · 3 IngestApi | 세 갈래 `NodePort 30080 · externalTrafficPolicy: Local · 헬스체크 /health/ready 1s · 요청 단위 roundrobin` |
+| 23 | 화살표 설비 → FleetController | `① 배치 이동 판정 · HTTP 동기 · LB 미경유 · 노드 IP:18080 고정 목록 · 실패 시 교대 · 재전송` |
 | 24 | 화살표 IngestApi → RabbitMQ → EventWorker → PostgreSQL | `confirm 후 202 · 파티션 16 · quorum` — 데이터가 인프라에 들어가는 경로가 끝까지 보이게 |
 | 25 | IngestApi 표기 | 노드마다 `IngestApi ×1 (노드당 1, required)` |
 | 26 | 범례 | `클러스터 밖`(점선 테두리) 추가 |
 
-## 설비 유입 · LB (중간관리 위임)
+---
 
-큰 틀은 02 "설비 데이터 유입". 아래를 상세 설계로 채우고 §10 · §11 · §12를 갱신한다.
+## 설비 유입 · LB
 
-| # | 항목 |
+큰 틀은 02 "설비 데이터 유입"(M5~). 위임 항목 1~6을 아래로 정하고 §5 · §10 · §11 · §12 · §13에 반영했다.
+M3 · M4는 LB가 없고 Simulator가 IngestApi · FleetController 주소를 직접 쓴다.
+
+| # | 항목 | 결정 | 절 |
+|---|---|---|---|
+| 1 | Simulator → FleetController | 노드 IP + FleetController **`hostPort: 18080`**, Simulator 설정에 노드 주소 3개 고정. 연결 거부는 시도로 세지 않고 다음 주소 | 아래 1 |
+| 2 | HAProxy | `mode http` · `roundrobin`(요청 단위), 헬스체크 `GET /health/ready` 1s · fall 2 · rise 2, 연결 실패만 재시도 · 요청 전달 뒤 재시도 금지 | 아래 2 |
+| 3 | keepalived | 유니캐스트, 110 / 100 + `nopreempt`, HAProxy `/healthz` 추적 → FAULT, VIP 이동 약 3~4초 | 아래 3 |
+| 4 | 배치 · 리소스 | Simulator 제거, IngestApi 3(노드당 1). request 5.16Gi / 5.91Gi, CPU 3.95 / 4.35 core | §10 · §11 |
+| 5 | M8 | `lb-1` 정지(2경로) · IngestApi 분배 제외(pod · 노드). 유실 0 · 중복 0 | §12, 아래 5 |
+| 6 | M7 AWS | 설비 EC2 1대에 Simulator + HAProxy 1개, keepalived 없음 | 아래 6 |
+
+### 1. Simulator → FleetController (LB 미경유)
+
+| 항목 | 값 | 근거 |
+|---|---|---|
+| 노출 | FleetController pod `hostPort: 18080`(→ 컨테이너 8080). Service 없음 | 노드 IP:18080 = 그 노드의 pod 하나. k3s 기본 CNI(flannel)에 `portmap`이 들어 있어 별도 설치가 없다. 클러스터 밖에서는 headless DNS(pod IP)가 닿지 않는다 |
+| 주소 목록 | Simulator 설정 `Fleet:Controller:Endpoints` = `http://192.168.10.11:18080` · `.12:18080` · `.13:18080`. **갱신 없음** | 노드 IP는 고정이다(02 "로컬 VM"). FleetController는 2대, 노드는 3대라 한 주소는 늘 비어 있다 |
+| 빈 주소 | 연결 거부(RST) 즉시 다음 주소. 시도 횟수에 세지 않는다(§5 "연결 거부") | 아무것도 듣지 않는 포트라 커널이 바로 거부한다. 요청이 전달되지 않았으므로 멱등 · 체인과 무관 |
+| 노드 VM 정지 | 응답 없음 → 시도 타임아웃 100ms 후 다음 주소(§5 그대로) | 거부와 달리 실제 시도 1회로 센다. 시도 3 = 죽은 인스턴스 · (최악) 꺼진 빈 노드 · 살아 있는 인스턴스 |
+| 배치 | 노드당 최대 1(같은 hostPort를 스케줄러가 한 노드에 두 번 놓지 않는다). preferred nodeAffinity `NotIn node-1` | 주소와 인스턴스가 1:1로 유지된다. node-1 장애 시 재배치가 멈추므로 정상 시 node-2 · 3(§10) |
+| 롤링 | `maxSurge 1 · maxUnavailable 0` | 노드 3대면 빈 노드에 새 pod가 뜬 뒤 옛 pod를 내린다. 노드 1대 장애 중에는 빈 노드가 없어 롤아웃이 멈춘다 — 장애 중 배포하지 않는다 |
+| `preStop` | 없음(기존 `sleep 3` 삭제, §5) | DNS 갱신 대기가 이유였다 |
+| 경로 계산 요청(§6) | 판정 고정 주소를 뺀 나머지를 교대, 거부는 건너뜀 | §6 "고정 인스턴스가 아닌 쪽" 유지 |
+| M3 · M4 | 같은 설정 키에 로컬 FleetController 주소 2개 | 코드 경로가 같다 |
+| M4 작업 영향 | `EndpointSelector`: headless DNS 갱신 → **고정 목록 · 성공 고정 · 거부 즉시 건너뛰기 · 교대**("구현 작업 분할" M4 S3) | DNS 조회 · 2초 갱신 · 마지막 목록 유지 로직이 없어진다 |
+
+> **총괄 권장(FleetController Service `NodePort` + `externalTrafficPolicy: Local`)을 쓰지 않는다.**
+> ① eTP Local은 로컬 endpoint가 없는 노드에서 패킷을 **드롭**한다. 빈 주소가 거부 대신 시도 타임아웃(100ms)을 먹어 시도 1회를 잃는다.
+> ② preferred anti-affinity는 노드 장애 · 복귀 뒤 두 pod를 한 노드에 남길 수 있다(되돌리지 않는다). 그러면 주소 2개가 비고,
+> 한 pod가 죽었을 때 시도 3회가 "죽은 pod · 빈 노드 · 빈 노드"로 소진돼 **살아 있는 pod에 닿기 전에 틱이 멈춘다.**
+> 같은 노드의 두 pod는 kube-proxy가 연결마다 고르므로 "성공 인스턴스 고정"의 대상도 흐려진다.
+> hostPort는 두 문제를 구조적으로 없앤다. IngestApi는 HAProxy 헬스체크가 빈 노드를 빼 주므로 NodePort 그대로다.
+
+### 2. HAProxy
+
+`lb-1` · `lb-2` 같은 설정. Ubuntu 24.04 패키지(HAProxy 2.8 LTS)로 둔다.
+
+```
+defaults
+    mode http
+    option httplog
+    timeout connect 300ms
+    timeout client 30s
+    timeout http-request 5s
+    timeout http-keep-alive 10s
+    timeout server 4s
+    timeout queue 1s
+    timeout check 500ms
+    retries 2
+    retry-on conn-failure
+    option redispatch 1
+
+frontend ingest
+    bind :80
+    default_backend ingest_api
+
+backend ingest_api
+    balance roundrobin
+    option httpchk GET /health/ready
+    http-check expect status 200
+    default-server inter 1s fall 2 rise 2
+    server node-1 192.168.10.11:30080 check
+    server node-2 192.168.10.12:30080 check
+    server node-3 192.168.10.13:30080 check
+
+frontend stats
+    bind :8404
+    http-request return status 200 content-type text/plain string ok if { path /healthz }
+    http-request use-service prometheus-exporter if { path /metrics }
+```
+
+| 설정 | 값 | 근거 |
+|---|---|---|
+| 모드 · 분배 | `mode http` · `balance roundrobin` | **요청 단위 분배.** HTTP 모드는 클라이언트 keep-alive 연결 위의 요청마다 서버를 다시 고른다. 직전 서버를 선호하는 `option prefer-last-server`는 기본 꺼짐이다. 서버 쪽 연결 재사용(`http-reuse safe`, 기본)은 서버를 고른 **뒤** 그 서버의 유휴 연결을 쓰는 것이라 분배를 바꾸지 않는다. `mode tcp`였다면 Simulator 연결 하나가 한 노드에 고정된다 |
+| roundrobin (leastconn 아님) | — | Simulator는 202를 받아야 다음 배치를 보내 동시 요청이 늘 1건이다. 연결 수 비교가 의미 없다 |
+| 노드가 바뀌어도 순서 유지 | — | 순서는 Simulator의 순차 송신(§9 책임 분담)이 보장한다. 앞 배치가 202를 받기 전에 뒤 배치가 다른 노드로 가는 일이 없다 |
+| 헬스체크 | `GET /health/ready` 기대 200 | IngestApi `MapFleetHealth()`(`src/Hosting/HealthEndpoints.cs:13`): 요구 구성 요소가 모두 준비면 200, 아니면 503. IngestApi의 요구 구성 요소는 `rabbitmq.topology` 하나이고 토폴로지 선언이 성공하면 켜진다(`src/Ingest.Core/IngestStartupService.cs:34`). **NodePort로 검사**하므로 kube-proxy 경로와 pod 준비를 함께 본다 — pod가 없거나 미준비인 노드는 eTP Local이 드롭해 검사 타임아웃으로 떨어진다 |
+| 주기 · 판정 | `inter 1s` · `fall 2` · `rise 2` · `timeout check 500ms` | 감지 최악 약 3초(직전 성공 직후 장애 → 1s + 1s + 0.5s). 1회 실패로 빼면 GC 정지 · 순간 지연에 흔들린다. 감지 창의 요청은 아래 연결 재시도와 Simulator 재전송이 덮는다. `rise 2`는 재기동 직후 한 번 성공으로 넣지 않게 |
+| 연결 실패 재시도 | `timeout connect 300ms` · `retries 2` · `retry-on conn-failure` · `option redispatch 1` | 연결이 안 됐으면 요청이 전달되지 않았다 → 중복 · 순서 영향 없음. 재시도마다 다른 노드로. 최악 3 × 300ms = 0.9초, Simulator 시도 타임아웃 5초 안 |
+| **요청 전달 뒤 재시도 금지** | `retry-on`에 응답 계열(`502` · `503` · `504` · `response-timeout` · `all-retryable-errors`)을 넣지 않는다 | 재전송은 Simulator가 같은 `batchId` · 같은 바이트로 한다(`src/Simulator/Events/EventBatchSender.cs:99`). HAProxy가 다시 보내면 첫 요청이 아직 발행 중인 노드와 겹쳐 `Busy` 503(`src/Ingest.Core/IngestService.cs:48`)만 늘고, 재시도가 두 층이 되어 시간이 곱해진다. L7 재시도는 요청을 버퍼(`tune.bufsize` 16KB)에 담아야 하는데 배치 본문은 최대 8MB라 어차피 대부분 불가하다 |
+| `timeout server` | 4s | IngestApi 최장 처리 = task · conflict confirm 2초(§9) + 멱등 Redis 명령 1초(§7 "그 외 1000ms") ≈ 3초. Simulator 시도 타임아웃 5초(`src/Simulator/Events/EventSenderOptions.cs:8`)보다 짧아 HAProxy가 먼저 504를 낸다 — 끊긴 원인이 LB 로그에 남는다 |
+| `timeout client` · `http-keep-alive` · `http-request` | 30s · 10s · 5s | Simulator 연결은 초당 10건으로 계속 쓰인다. 유휴 연결은 10초 뒤 닫는다. 8MB 본문도 같은 호스트 내부망에서 5초 안 |
+| `bind :80` | VIP를 지정하지 않음 | BACKUP 쪽에는 VIP가 없어 VIP bind가 실패한다. 와일드카드면 `ip_nonlocal_bind` 없이 두 대가 같은 설정 |
+| 본문 상한 | HAProxy는 두지 않음 | 스트리밍한다. 상한은 IngestApi Kestrel 8MB(`src/IngestApi/Program.cs:7`) 하나로 |
+| stats `:8404` | `/healthz` · `/metrics` | keepalived 추적(아래 3)과 Prometheus 수집(§12). 내장 prometheus-exporter(2.4부터 기본 포함, 설치 후 `haproxy -vv`로 확인) |
+
+IngestApi 쪽 짝 설정:
+
+| 설정 | 값 | 근거 |
+|---|---|---|
+| Service | `type: NodePort` · `nodePort: 30080` · `externalTrafficPolicy: Local` | 02 큰 틀. nodePort를 고정해야 HAProxy가 노드 IP:포트를 적을 수 있다 |
+| replicas · 배치 | 3, required anti-affinity `kubernetes.io/hostname` | §10 |
+| 롤링 | `maxSurge 0 · maxUnavailable 1` | 노드마다 이미 1개라 surge pod가 들어갈 노드가 없다. 기본값(surge 1)이면 새 pod가 Pending에서 롤아웃이 멈춘다 |
+| `preStop` | `sleep 4` | 종료가 시작되면 endpoint가 빠져 새 연결은 드롭되지만, HAProxy가 재사용하는 기존 연결로는 요청이 계속 온다. 헬스체크 감지 최악(약 3초)이 지나 DOWN이 된 뒤 Kestrel을 멈추면 drain · 롤링 중 5xx가 0이 된다 |
+| `terminationGracePeriodSeconds` | 기본 30 유지 | preStop 4초 + 최장 처리 3초가 들어간다 |
+| readiness | 코드 그대로 | 현재 readiness는 기동 시 토폴로지 선언 1회만 본다(RabbitMQ 재연결 상태는 반영하지 않는다). 한 노드만 RabbitMQ 연결을 잃으면 그 노드의 요청이 503 → Simulator 재전송(백오프 100ms) → roundrobin 다음 노드. 유실 · 중복이 없고 지연만 늘어 바꾸지 않는다 |
+| 인그레스 | `/api/v1/events` 경로 삭제(02 "인그레스") | 설비 유입은 HAProxy → NodePort만. 터널에 이벤트 쓰기 경로가 올라가지 않는다 |
+
+### 3. keepalived
+
+```
+global_defs {
+    enable_script_security
+    script_user keepalived_script
+}
+vrrp_script chk_haproxy {
+    script "/usr/bin/curl -sf -m 0.5 http://127.0.0.1:8404/healthz"
+    interval 1
+    fall 2
+    rise 2
+}
+vrrp_instance ingest {
+    state BACKUP
+    nopreempt
+    interface ens33                  # 실제 이름은 ip link로
+    virtual_router_id 20
+    priority 110                     # lb-2: 100
+    advert_int 1
+    unicast_src_ip 192.168.10.21     # lb-2: .22
+    unicast_peer {
+        192.168.10.22                # lb-2: .21
+    }
+    virtual_ipaddress {
+        192.168.10.20/24 dev ens33
+    }
+    track_script {
+        chk_haproxy
+    }
+    garp_master_refresh 10
+}
+```
+
+| 설정 | 값 | 근거 |
+|---|---|---|
+| VRRP 방식 | **유니캐스트**, 피어는 상대 LB 고정 IP 하나 | 멀티캐스트 전달 여부를 가상 스위치에 맡기지 않는다. 같은 vmnet8의 다른 VRRP와 섞이지 않는다 |
+| 우선순위 | `lb-1` 110 / `lb-2` 100, 둘 다 `state BACKUP` + `nopreempt` | 기동 시 높은 쪽(`lb-1`)이 MASTER가 된다(큰 틀). `lb-1`이 돌아와도 VIP를 되찾지 않는다 — 되찾으면 VIP 이동이 한 번 더 일어나 유입이 다시 끊긴다. `nopreempt`는 `state BACKUP`에서만 동작한다 |
+| HAProxy 추적 | `/healthz` 응답, `interval 1` · `fall 2`. 실패 시 weight 없이 **FAULT** | 프로세스 존재(`killall -0`)가 아니라 응답을 본다 — 멈춘 프로세스도 잡는다. FAULT는 우선순위 0 광고를 보내 상대가 즉시 승격한다. weight 방식은 `nopreempt`와 섞이면 복귀 판단이 꼬인다 |
+| `advert_int` | 1 | BACKUP의 MASTER 다운 판정 = 3 × 1s + skew((256 − 100) / 256 ≈ 0.61s) ≈ 3.6초. 1초 미만은 VRRPv2에서 불가하고, VM CPU steal에 오탐한다 |
+| GARP | 전환 즉시 + `garp_master_refresh 10`(MASTER 동안 10초마다) | 호스트가 첫 GARP를 놓쳐도 10초 안에 ARP가 바뀐다 |
+| 분리 시 두 MASTER | 허용 | 두 HAProxy 모두 상태가 없고 같은 IngestApi로 보낸다. ARP가 흔들릴 뿐 안전성 · 멱등에 영향 없다 |
+
+| VIP 이동 예상 | 시간 | 구성 |
+|---|---|---|
+| `lb-1` HAProxy 정지 | 약 2.6초 | 추적 실패 2회(2초) + FAULT 광고 → `lb-2` skew 0.6초 |
+| `lb-1` VM 정지 | 약 3.6초 | 광고 3회 누락 + skew |
+| Simulator가 보는 유입 중단 | 최악 약 10초 | 진행 중 시도가 꺼진 `lb-1`에 묶이면 시도 타임아웃 5초 → 백오프 → VIP가 옮겨 간 뒤 새 연결. 호스트 ARP가 GARP를 따르지 않으면 `garp_master_refresh` 10초까지 늘 수 있다 |
+
+> M8 합격 상한은 15초(§12)로 둔다. 버퍼 60초(600배치)의 1/4이라 틱이 멈추지 않는다. 측정이 15초를 넘고 원인이 호스트 ARP 갱신이면
+> `use_vmac`(VRRP 가상 MAC — 이동해도 MAC이 같아 ARP 갱신이 필요 없다)을 검토한다.
+
+### 4. 배치 · 리소스
+
+§10 배치 표 · 워크로드 표 · 과반 표, §11 노드별 request · 재배치 표, 02 "리소스 배분"에 반영했다.
+
+### 5. M8 시나리오 근거
+
+시나리오 · 측정 · 합격 기준은 §12 표, 02 "장애 주입 (M8)".
+
+| 항목 | 근거 |
 |---|---|
-| 1 | 클러스터 밖 Simulator → FleetController 경로: headless DNS를 못 쓰므로 인스턴스 노출 · 목록 갱신 방식(성공 인스턴스 고정 · 실패 시 교대 · 재전송 규약 유지) |
-| 2 | HAProxy 설정값: 분배 방식, 헬스체크 경로 · 주기 · 판정 횟수, 타임아웃, 재시도 금지 여부(재전송은 Simulator가 같은 `batchId`로 한다) |
-| 3 | keepalived: VRRP 방식(유니캐스트 피어), 우선순위, HAProxy 프로세스 추적, VIP 이동 시간 |
-| 4 | §10 배치 · §11 리소스: Simulator 제거, IngestApi 노드당 1(3), 노드 1대 장애 재배치 표 |
-| 5 | §12 M8 시나리오 추가: `lb-1` 정지(VIP 이동), IngestApi 노드 장애 시 분배 제외. 합격 기준 유실 0 · 중복 0 |
-| 6 | M7(AWS)에서 설비 · LB 위치 |
+| 유실 0 | 이벤트는 202 전까지 Simulator 버퍼에 남는다(§9). LB · IngestApi가 죽어도 버퍼에서 같은 `batchId`로 다시 보낸다. task · conflict는 confirm 후에만 202 |
+| 중복 0 | 끊긴 요청이 이미 발행됐을 수 있다. 재전송은 `idem:{batchId}` `done`이면 202(중복 응답)로 끝나고, 멱등 키가 없어도(fail-open) 워커 2차 방어가 막는다(§9). 중복은 DB 기준(§12 정의) |
+| `lb-1` 두 경로 | HAProxy 정지는 keepalived 추적 → FAULT 경로, VM 정지는 VRRP 광고 끊김 경로다. 이동 시간이 다르다(위 3) |
+| IngestApi 두 단위 | pod 삭제는 노드가 살아 있어 eTP Local 드롭 → 헬스체크 DOWN만 본다. 노드 정지는 데이터 멤버 장애가 겹치므로 "노드 강제 소실"과 같은 실행에서 함께 잰다 |
+| IngestApi 유입 중단 ≤ 10초 | 진행 중 요청이 죽은 노드에 묶이면 `timeout server` 4초 → 504 → Simulator 재전송(100ms) → 연결 실패면 HAProxy가 다른 노드로. 감지 창(약 3초) 이후에는 DOWN 노드로 가지 않는다 |
+| (a)만 틱 정지 0 | pod 삭제는 판정 경로와 무관하다. 노드 정지는 Redis primary가 있었으면 장애 조치 동안 틱이 멈춘다(그 상한은 기존 30초) |
+
+### 6. M7 (AWS)에서 설비 · LB
+
+| 결정 | 근거 |
+|---|---|
+| **설비 EC2 1대(`c7g.xlarge`, 노드와 같은 서브넷)에 Simulator + HAProxy 1개. keepalived 없음** | M7은 부하 실험이지 LB 장애 실험이 아니다(LB 장애는 M8 로컬). VPC는 GARP로 VIP가 옮겨지지 않아 keepalived에 EC2 API 호출(보조 IP 재할당) 스크립트가 필요한데 M7이 재는 것과 무관하다. HAProxy를 두면 유입 경로(HAProxy → NodePort → IngestApi)가 로컬과 같다 |
+| Simulator를 노드 밖 별도 인스턴스에 | 로컬과 같이 클러스터 밖. 노드 CPU를 나눠 쓰지 않아야 틱 초과가 클러스터 쪽 한계인지 가린다 |
+| HAProxy를 Simulator와 같은 인스턴스에 | 초당 10건이라 CPU가 거의 들지 않는다. 인스턴스 1대를 아낀다 |
+| 주소는 Terraform 출력으로 | HAProxy `server` 줄과 Simulator `Fleet:Controller:Endpoints`를 노드 사설 IP로 채운다. AWS는 apply마다 IP가 바뀐다(02 "왜 로컬이 기본인가") |
+| vCPU 한도 12 → **16** | 노드 3 × 4 + 설비 1 × 4 |
+| AWS NLB · ALB를 쓰지 않는다 | 로컬과 다른 LB가 되어 M7 결과에 변수가 하나 더 생긴다 |
+
+---
 
 ## 메트릭 · 알림 추가
 
@@ -793,6 +987,7 @@ FleetController 배치 처리 중 kill은 시점을 고정해야 재현된다. �
 | `fleet_reclaim_total{map_id}` | counter | Simulator |
 | `fleet_overlap_total{map_id}` | counter | Simulator |
 | `fleet_event_buffer_depth{map_id}` | gauge | Simulator |
+| `fleet_event_send_stall_seconds` (첫 송신 실패 ~ 다음 202) | histogram | Simulator |
 | `fleet_telemetry_dropped_total{reason}` | counter | IngestApi |
 | `fleet_ingest_idem_bypass_total` | counter | IngestApi |
 
@@ -830,7 +1025,7 @@ FleetController 배치 처리 중 kill은 시점을 고정해야 재현된다. �
 - [ ] [핵심] `tests/FleetController.Tests/Redis/RetransmitTests.cs` — §4 "죽는 시점" 표 1~10번, 시퀀스 A · B 재현
 - [ ] [단순 S1] `src/FleetController.Api/Contracts/*.cs`, `src/FleetController.Api/Program.cs`, `Endpoints/*.cs` — 배치 · 재주장 · 경로 DTO(`prev`, `releases`, `digest`, 409 `cause`), 엔드포인트 배선, readiness(Redis 미포함)
 - [ ] [단순 S2] `src/FleetController/Arbitration/Redis/{MapFieldCodec,RequestHasher,RedisOptions,RedisConnectionFactory}.cs` — 필드 인코딩, 정규화 해시, Sentinel 접속 설정(§7 표)
-- [ ] [단순 S3] `src/FleetController.Api/Paths/{PathBatchEndpoint,LocalPathCache}.cs`, `src/Simulator/Remote/{HttpPathPlanner,EndpointSelector}.cs` — 경로 엔드포인트 · LRU, headless DNS 갱신 · 교대 선택
+- [ ] [단순 S3] `src/FleetController.Api/Paths/{PathBatchEndpoint,LocalPathCache}.cs`, `src/Simulator/Remote/{HttpPathPlanner,EndpointSelector}.cs` — 경로 엔드포인트 · LRU, 고정 주소 목록(`Fleet:Controller:Endpoints`) · 성공 고정 · 연결 거부 즉시 건너뛰기(시도 미산입) · 교대 선택("설비 유입 · LB" 1)
 - [ ] [단순 S4] `src/FleetController/Diagnostics/FaultInjection.cs` — 장애 주입 훅. 검증용 Redis 1+2 · Sentinel 3은 사용자 제공 서버(요구사항: Redis 7.2, §1 설정 값 적용, Sentinel 접속 정보는 appsettings)
 - [ ] [핵심] `RobotStepper` — 빈 배치도 매 틱 전송, 계획 단계를 경로 배치 호출로
 
@@ -839,16 +1034,16 @@ FleetController 배치 처리 중 kill은 시점을 고정해야 재현된다. �
 - [ ] [단순 S1] `deploy/k3s/storage/local-pv.yaml`, `storageclass.yaml`, `deploy/k3s/install/{node-1,node-agent}.sh` — §10 local PV **11개**(Redis · Sentinel · RabbitMQ 각 3 + PostgreSQL + Prometheus), `--node-name` 고정 · taint 없음 · agent 조인(system-reserved 600Mi) · `fleet/pg` 레이블
 - [ ] [단순 S2] `deploy/k3s/redis/{redis-sts,sentinel-sts,configmap,pdb,services}.yaml` — required anti-affinity, §1 설정
 - [ ] [단순 S3] `deploy/k3s/rabbitmq/{sts,configmap,pdb,rbac,services}.yaml`, `scripts/rabbitmq-grow.sh` — §8 브로커 설정, grow · rebalance
-- [ ] [단순 S4] `deploy/k3s/apps/{fleet-controller,ingest-api,event-worker,query-api,simulator}.yaml`, `deploy/k3s/system/coredns-patch.yaml` — 02 리소스 표, preferred anti-affinity, headless Service, PDB, `preStop`
+- [ ] [단순 S4] `deploy/k3s/apps/{fleet-controller,ingest-api,event-worker,query-api}.yaml`, `deploy/k3s/system/coredns-patch.yaml` — 02 리소스 표, FleetController `hostPort 18080` · `NotIn node-1` preferred · 롤링 surge 1, IngestApi 3 · required · `NodePort 30080` `externalTrafficPolicy: Local` · 롤링 surge 0 · `preStop sleep 4`, PDB ("설비 유입 · LB" 1 · 2). Simulator 매니페스트 없음(클러스터 밖)
 - [ ] [핵심] `deploy/k3s/redis/init-role.sh` — §10 역할 결정 표
 - [ ] [핵심] node-1~3 기동 검증: anti-affinity · PV 바인딩 · quorum 멤버 3 · 리더 분산 · 장애 조치 1회 수동 확인
 - [x] [단순] (위 묶음 완료 후) `docs/images/deployment-ha.svg` — §13 명세
-- [ ] [단순] `deploy/terraform/` — **M7 전용**. `c7g.xlarge` × 3 온디맨드 · 서울 · 노드 3대 같은 서브넷, k3s 설치는 위 스크립트와 같은 매니페스트(`--node-name node-1~3`). `apply` → 실험 → 결과 회수 → `destroy` (02 "M7 — AWS")
+- [ ] [단순] `deploy/terraform/` — **M7 전용**. `c7g.xlarge` × 3 온디맨드 · 서울 · 노드 3대 같은 서브넷, k3s 설치는 위 스크립트와 같은 매니페스트(`--node-name node-1~3`). `apply` → 실험 → 결과 회수 → `destroy` (02 "M7 — AWS"). 설비 인스턴스 1대(Simulator + HAProxy), 노드 사설 IP를 출력("설비 유입 · LB" 6)
 
 ### M8 — 장애 주입
 
 - [ ] [단순 S1] `loadtest/chaos/{01-redis-primary-kill,02-sentinel-kill,03-rabbitmq-leader-node-kill}.sh` — 02 표의 명령 · 대상 식별(현재 primary, 리더 최다 노드)
-- [ ] [단순 S2] `loadtest/chaos/{04-fleet-controller-kill,05-node-drain,06-node-1-down,07-node-power-off}.sh` — `FLEET_FAULT_KILL_AT` 3종 × 100회, node-2 · 3 drain · uncordon, node-1(API 서버) 장애, VM 전원 차단(스냅샷 복원 후 반복)
-- [ ] [단순 S3] `loadtest/chaos/reconcile.sql`, `loadtest/chaos/measure.sh` — §12 유실 · 중복 대조, 정지 시간 추출
-- [ ] [단순 S4] `monitoring/grafana/ha-dashboard.json` — 메트릭 표 패널 + 알림 4종
+- [ ] [단순 S2] `loadtest/chaos/{04-fleet-controller-kill,05-node-drain,06-node-1-down,07-node-power-off,08-lb-1-down,09-ingest-out}.sh` — `FLEET_FAULT_KILL_AT` 3종 × 100회, node-2 · 3 drain · uncordon, node-1(API 서버) 장애, VM 전원 차단(스냅샷 복원 후 반복), `lb-1` HAProxy 정지 · VM 정지 각 20회, IngestApi pod 강제 삭제 20회(§12)
+- [ ] [단순 S3] `loadtest/chaos/reconcile.sql`, `loadtest/chaos/measure.sh` — §12 유실 · 중복 대조, 정지 시간 · 유입 중단 시간 · VIP 이동 시간(`lb-2` journald) · HAProxy DOWN 시각 추출
+- [ ] [단순 S4] `monitoring/grafana/ha-dashboard.json` — 메트릭 표 패널 + 알림 4종 + HAProxy(server 상태 · 재시도 · 5xx) 패널
 - [ ] [핵심] 시나리오 실행 · 합격 판정 · `docs/09-m8-results.md` 작성 (겹침 0 확인, 30초 초과 시 원인 분석)
