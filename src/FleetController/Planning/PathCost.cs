@@ -1,8 +1,9 @@
 using RobotFleet.Shared.Geometry;
+using RobotFleet.Shared.Tuning;
 
 namespace RobotFleet.FleetController.Planning;
 
-public sealed record PathCost(double Move = 1.0, double TurnPer90 = 0.5)
+public sealed record PathCost(double Move = 1.0, double TurnPer90 = TuningDefaults.TurnCost)
 {
     public static readonly PathCost Default = new();
 
