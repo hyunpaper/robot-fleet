@@ -16,5 +16,7 @@
   <ItemGroup>
     <Content Include="Golden/**" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Fixtures/**" CopyToOutputDirectory="PreserveNewest" />
+    <!-- LR-05: 사용자 메시지 JSON = Shared.Tests AJ-01 골든(단일 출처) -->
+    <Content Include="../Shared.Tests/Agent/Golden/snapshot-no-yield.json" Link="Golden/snapshot-no-yield.json" CopyToOutputDirectory="PreserveNewest" Condition="Exists('../Shared.Tests/Agent/Golden/snapshot-no-yield.json')" />
   </ItemGroup>
 </Project>
