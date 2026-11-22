@@ -1,3 +1,5 @@
+using RobotFleet.Shared.Tuning;
+
 namespace RobotFleet.Simulator.Fleet;
 
 /// 다대 로봇 시뮬레이션 설정. 10 §1 · §9
@@ -23,13 +25,13 @@ public sealed record FleetOptions
     public int TurnMsPer90 { get; init; } = 300;
 
     /// 재계획 트리거: 대기 임계(ms). 04 설정값 6
-    public int ReplanWaitThresholdMs { get; init; } = 500;
+    public int ReplanWaitThresholdMs { get; init; } = TuningDefaults.ReplanWaitThresholdMs;
 
     /// 같은 로봇의 재계획 쿨다운(ms). 04 설정값 7
-    public int ReplanCooldownMs { get; init; } = 100;
+    public int ReplanCooldownMs { get; init; } = TuningDefaults.ReplanCooldownMs;
 
     /// 같은 작업의 재계획 상한(초과 시 작업 실패). 04 설정값 8
-    public int ReplanMaxPerTask { get; init; } = 5;
+    public int ReplanMaxPerTask { get; init; } = TuningDefaults.ReplanMaxPerTask;
 
     public long MaxTicks { get; init; } = 100_000;
 
