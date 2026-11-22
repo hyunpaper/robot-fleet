@@ -49,11 +49,11 @@
 | M2 | 다중 로봇, 충돌 회피, 교착 탐지·해소 | 완료 |
 | M3 | Ingest API + RabbitMQ + Worker로 이벤트 파이프라인 분리 | 구현 완료, 실서버 검증 남음 |
 | M4 | 락·상태·멱등 키를 Redis로 이전, 관제 서버 2대(재전송 멱등, 장애 조치 감지) | |
-| M5 | k3s 노드 3대 배포, nginx ingress, Redis Sentinel·RabbitMQ 3노드, 스케일 아웃 | |
+| M5 | k3s 노드 3대 배포, nginx ingress, HAProxy 2대로 설비 데이터 유입 분산, Redis Sentinel·RabbitMQ 3노드, 스케일 아웃 | |
 | M6 | Prometheus + Grafana, 실시간 관제 화면, run 재생 데이터 내보내기·정적 재생기 | |
 | M7 | 실험(AWS): 로봇 수별 처리량, 회피 전략·우선순위 정책 비교 | |
 | M8 | 장애 주입: pod 강제 종료, Redis·브로커 장애 조치, 노드 drain·강제 소실, 네트워크 지연 | |
-| M9 | AI Agent(교착 분석·인프라), 요청 서비스와 관리 콘솔: 정책 파라미터·운영 조치 제안, 승인 후 반영 | |
+| M9 | AI Agent(교착 분석·인프라, Claude API), 요청 서비스와 관리 콘솔: 정책 파라미터·운영 조치 제안, 승인 후 반영 | |
 
 ### 남은 작업
 
@@ -61,10 +61,10 @@
 |---|---|
 | M3 | 실서버 통합 테스트 47건 실행, 워커 kill·Ingest 재시작 포함 30분 E2E로 유실 0·중복 0 확인 |
 | M4 | Redis 이동 판정기(해시 체인 워터마크, 커밋·재주장 Lua), 관제 서버 2대 재전송 멱등, 장애 조치 감지 |
-| M5 | 노드 3대 k3s 구성, Redis Sentinel·RabbitMQ 3노드 배포, quorum 멤버 확장 |
+| M5 | 노드 3대 k3s 구성, LB VM 2대(HAProxy·keepalived), Redis Sentinel·RabbitMQ 3노드 배포, quorum 멤버 확장 |
 | M6 | Prometheus 수집, Grafana 대시보드, 실시간 관제 화면(QueryApi·WebSocket), run 재생 데이터 내보내기와 정적 재생기 |
 | M7 | run 전환 기능 뒤 AWS에서 로봇 수별 처리량, 회피 전략·우선순위 정책·통로 폭·혼잡 가중치 비교 실험 |
-| M8 | Redis primary·RabbitMQ leader·관제 서버·노드 장애 주입(drain·강제 소실·node-1 API 서버), 겹침 0·유실 0·정지 시간 측정 |
+| M8 | Redis primary·RabbitMQ leader·관제 서버·LB·노드 장애 주입(drain·강제 소실·node-1 API 서버), 겹침 0·유실 0·정지 시간 측정 |
 | M9 | 요청 서비스(ControlApi)·관리 콘솔, 교착 분석 에이전트(정책 파라미터 수정안·자동 검증), 인프라 에이전트(운영 조치 제안), 승인 후 반영 |
 
 ---
@@ -95,13 +95,13 @@ robot-fleet/
 ## 설계 요약
 
 ```
-Simulator ──(틱마다 배치 이동 요청)──► FleetController ◄──► Redis   셀 락, 로봇 상태, 대기 그래프
+설비(Simulator) ──(틱마다 배치 이동 요청)──► FleetController ◄──► Redis   셀 락, 로봇 상태, 대기 그래프
     │
-    └──(이벤트 배치)──► IngestApi ──► RabbitMQ ──► EventWorker ──► PostgreSQL
-                                                                     ▲
-                                                         QueryApi ───┘ ──► 관제 화면 / Grafana
+    └──(이벤트 배치)──► HAProxy ×2 (VIP) ──► IngestApi (노드당 1) ──► RabbitMQ ──► EventWorker ──► PostgreSQL
+                        노드 선택                                                                      ▲
+                                                                                           QueryApi ───┘ ──► 관제 화면 / Grafana
 
-관리 콘솔 ──(승인·거절)──► ControlApi ◄──(제안)── AI Agent (교착 분석 · 인프라)
+관리 콘솔 ──(승인·거절)──► ControlApi ◄──(제안)── AI Agent (교착 분석 · 인프라) ──► Claude API
                               └──► PR 생성 · 운영 조치 실행
 ```
 
@@ -121,6 +121,7 @@ Simulator ──(틱마다 배치 이동 요청)──► FleetController ◄─
 | [10-m3-detailed-design](docs/10-m3-detailed-design.md) | 이벤트 계약, 발행 확인, 워커 배치·배정, 스키마, 테스트 목록, 작업 분할 |
 | [12-control-console](docs/12-control-console.md) | 관제 화면 · MES형 뷰, 에이전트 제안 승인, 요청 서비스(ControlApi) |
 | [13-m2-deadlock](docs/13-m2-deadlock.md) | 교착 탐지·양보·재시도, 해소 락, 재계획 규칙, 교착 이벤트 |
+| [14-m9-llm-client](docs/14-m9-llm-client.md) | M9 LLM 호출 계층: 등급 A 카탈로그, 사실 스냅샷·제안 초안 계약, 프롬프트·스키마, 응답 파싱, 호출 경계 |
 
 ---
 
@@ -133,7 +134,9 @@ Simulator ──(틱마다 배치 이동 요청)──► FleetController ◄─
 | 메시징 | RabbitMQ (RabbitMQ.Client) |
 | 상태 · 락 | Redis |
 | 저장소 | PostgreSQL |
-| 배포 | k3s, nginx ingress |
+| 배포 | k3s, nginx ingress, HAProxy + keepalived (설비 데이터 유입) |
+| AI Agent | Claude API |
+| CI | GitHub Actions (빌드·테스트, Claude 코드 리뷰, 주간 릴리즈) |
 | 모니터링 | Prometheus, Grafana |
 | 부하 테스트 | 시뮬레이터, k6 |
 
@@ -147,6 +150,7 @@ Simulator ──(틱마다 배치 이동 요청)──► FleetController ◄─
 | **교착 해소** | 분산 락 구조상 순환 대기 발생 | 대기 그래프 순환 탐지, 최저 비용 로봇 양보, 비킬 곳 없으면 1초 간격 재시도 |
 | **판정 정합성** | 장애 조치로 최근 틱 소실 시 이중 승인 | 해시 체인 워터마크, 꼬리 불일치면 판정 거부 후 재주장 |
 | **순서 보장** | 완료 이벤트가 시작보다 먼저 처리 | robotId 해시 16파티션, 파티션당 단일 소비자 |
+| **유입 분산** | 수집 노드 하나가 죽으면 설비 데이터 유입 중단 | HAProxy가 헬스체크로 노드 선택, keepalived VIP로 LB 이중화 |
 | **멱등 처리** | 재전송 이벤트 유실 또는 중복 집계 | 고정 이벤트 ID, 2단계 키, DB 유니크 제약 |
 | **상태 복구** | Redis 초기화·장애 조치 시 칸 점유 소실 | epoch·체인 검사로 감지, Simulator 위치로 맵 해시 재구성 |
 | **경로 계획** | 최단 경로의 잦은 회전으로 지연 | 방향 포함 A*, 회전 비용 반영, 1회 0.15ms |

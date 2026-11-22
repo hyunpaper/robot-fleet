@@ -13,8 +13,9 @@
 2. `main`에서 브랜치 `<type>/<이슈번호>-<slug>`(type: feat·fix·docs·chore·test)를 딴다. 병렬 작업은 worktree로 나눈다.
 3. 커밋은 로컬에만 쌓는다. **중간 커밋을 push하지 않는다.**
 4. 리뷰는 push 전에 로컬 diff로 끝낸다(하위 → 중간 관리자, 중간 관리자 → 총괄).
-5. 리뷰를 통과하면 메인 세션이 **한 번만** push하고 PR(`Closes #N`)을 연다. CI는 이때 한 번 돈다.
-6. CI가 실패하면 고쳐서 한 번 더 push한다. 통과하면 merge commit으로 머지하고 브랜치를 지운다.
+5. 리뷰를 통과하면 메인 세션이 **한 번만** push하고 PR(`Closes #N`)을 연다. CI와 코드 리뷰가 이때 한 번 돈다.
+6. CI 실패 또는 코드 리뷰의 머지 차단 지적(빨간 체크)이 있으면 한 번에 모아 고치고 한 번 더 push한다. 차단이 아닌 지적은 메인 세션이 반영 여부를 정하고 PR 코멘트로 답한다.
+7. CI · 코드 리뷰가 모두 통과하면 merge commit으로 머지하고 브랜치를 지운다.
 
 > GitHub Actions 실행 횟수를 줄이는 게 목적이다. 재작업이 생기면 push 횟수가 늘어나므로 리뷰에서 한 번에 끝낸다.
 
@@ -30,10 +31,17 @@
 
 > "확인 필요", "개선 바람" 같은 지시는 쓰지 않는다. 판단이 갈리는 항목은 선택지와 권장안을 같이 적는다.
 
-## CI
-`.github/workflows/ci.yml`: PR(대상 `main`, `release/**`)에서만 Init(restore) → Build → Test. 배포는 하지 않는다. 통합 테스트는 접속 정보가 없어 skip된다.
+## 파이프라인 (GitHub Actions 3개)
+| 워크플로 | 언제 | 하는 일 |
+|---|---|---|
+| `ci.yml` | PR(대상 `main`, `release/**`) | Init(restore) → Build → Test. 배포 없음. 통합 테스트는 접속 정보가 없어 skip |
+| `review.yml` | 같은 PR | Claude 코드 리뷰(`anthropics/claude-code-action`, 모델 `claude-fable-5-2`). 인라인 코멘트 + 요약, 머지 차단 결함이 있으면 체크 실패. 저장소 시크릿 `ANTHROPIC_API_KEY` 필요 |
+| `release.yml` | 매주 월요일 · 수동 | 릴리즈 태그(아래 "릴리즈") |
+
+> **시크릿 등록 전 리뷰 게이트**: `ANTHROPIC_API_KEY`가 없어 `review` 체크가 인증 단계에서 실패하는 동안은, 메인 세션이 띄운 Fable 리뷰어 에이전트(모델 `fable`)의 PR 리뷰 코멘트를 코드 리뷰로 삼는다. 본문 첫 줄 `판정: 승인`이 나와야 머지한다. 재검토는 같은 리뷰어에게 지적 번호별로 요청한다. 시크릿이 등록되면 `review` 체크로 돌아간다.
 
 로컬 완료 기준은 그대로다: `dotnet build` 경고 0, `dotnet test` 실패 0, `dotnet format --verify-no-changes` 통과.
+**코드 커버리지는 측정하지 않고 목표도 두지 않는다.** 테스트는 설계 문서의 시험 표와 결함 재현에 맞춘다.
 
 ## 릴리즈
 | 종류 | 태그 | 방법 |
